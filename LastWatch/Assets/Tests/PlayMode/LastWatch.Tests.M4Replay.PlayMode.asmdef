@@ -1,0 +1,19 @@
+{
+  "name": "LastWatch.Tests.M4Replay.PlayMode",
+  "rootNamespace": "LastWatch.Tests.M4",
+  "references": [
+    "LastWatch.Core"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false,
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}

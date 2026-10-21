@@ -1,0 +1,10 @@
+{
+  "policyId": "LW-M4-V36-FIRST-OWNER-QA-20261014-R1",
+  "startDistanceMetres": 2.0,
+  "maintainDistanceMetres": 2.75,
+  "occlusionGraceSeconds": 0.16,
+  "distanceMetric": "PlayerOriginXZToPartnerCapsuleCenterXZ",
+  "lineOfSightMetric": "ActualCameraToPartnerCapsuleCenter",
+  "holdDelaySeconds": 0.0,
+  "requireClearAtCompletion": true
+}

@@ -1,0 +1,390 @@
+{
+  "initialNodeId": "S_A",
+  "metresPerSecond": 4.5,
+  "nodes": [
+    {
+      "id": "S_0",
+      "stationDescriptorId": "S_0",
+      "aliases": [],
+      "bodyAnchor": {
+        "x": 0,
+        "y": 29.350000381469727,
+        "z": 0
+      },
+      "safe": true,
+      "alternativeNodeIds": [],
+      "occupancyColliderNames": []
+    },
+    {
+      "id": "S_A",
+      "stationDescriptorId": "S_A",
+      "aliases": [
+        "FaceA.Cover"
+      ],
+      "bodyAnchor": {
+        "x": 0,
+        "y": 29.350000381469727,
+        "z": 5
+      },
+      "safe": false,
+      "alternativeNodeIds": [],
+      "occupancyColliderNames": []
+    },
+    {
+      "id": "S_B",
+      "stationDescriptorId": "S_B",
+      "aliases": [
+        "FaceB.Cover"
+      ],
+      "bodyAnchor": {
+        "x": 4.330127,
+        "y": 29.350000381469727,
+        "z": -2.5
+      },
+      "safe": false,
+      "alternativeNodeIds": [],
+      "occupancyColliderNames": []
+    },
+    {
+      "id": "S_C",
+      "stationDescriptorId": "S_C",
+      "aliases": [
+        "FaceC.Cover"
+      ],
+      "bodyAnchor": {
+        "x": -4.330127,
+        "y": 29.350000381469727,
+        "z": -2.5
+      },
+      "safe": false,
+      "alternativeNodeIds": [],
+      "occupancyColliderNames": []
+    }
+  ],
+  "edges": [
+    {
+      "fromNodeId": "S_0",
+      "toNodeId": "S_A",
+      "bodyPoints": [
+        {
+          "x": 0,
+          "y": 29.350000381469727,
+          "z": 0
+        },
+        {
+          "x": 0,
+          "y": 29.350000381469727,
+          "z": 5
+        }
+      ]
+    },
+    {
+      "fromNodeId": "S_0",
+      "toNodeId": "S_B",
+      "bodyPoints": [
+        {
+          "x": 0,
+          "y": 29.350000381469727,
+          "z": 0
+        },
+        {
+          "x": 4.330127,
+          "y": 29.350000381469727,
+          "z": -2.5
+        }
+      ]
+    },
+    {
+      "fromNodeId": "S_0",
+      "toNodeId": "S_C",
+      "bodyPoints": [
+        {
+          "x": 0,
+          "y": 29.350000381469727,
+          "z": 0
+        },
+        {
+          "x": -4.330127,
+          "y": 29.350000381469727,
+          "z": -2.5
+        }
+      ]
+    },
+    {
+      "fromNodeId": "S_A",
+      "toNodeId": "S_0",
+      "bodyPoints": [
+        {
+          "x": 0,
+          "y": 29.350000381469727,
+          "z": 5
+        },
+        {
+          "x": 0,
+          "y": 29.350000381469727,
+          "z": 0
+        }
+      ]
+    },
+    {
+      "fromNodeId": "S_A",
+      "toNodeId": "S_B",
+      "bodyPoints": [
+        {
+          "x": 0,
+          "y": 29.350000381469727,
+          "z": 5
+        },
+        {
+          "x": 4.330127,
+          "y": 29.350000381469727,
+          "z": -2.5
+        }
+      ]
+    },
+    {
+      "fromNodeId": "S_A",
+      "toNodeId": "S_C",
+      "bodyPoints": [
+        {
+          "x": 0,
+          "y": 29.350000381469727,
+          "z": 5
+        },
+        {
+          "x": -4.330127,
+          "y": 29.350000381469727,
+          "z": -2.5
+        }
+      ]
+    },
+    {
+      "fromNodeId": "S_B",
+      "toNodeId": "S_0",
+      "bodyPoints": [
+        {
+          "x": 4.330127,
+          "y": 29.350000381469727,
+          "z": -2.5
+        },
+        {
+          "x": 0,
+          "y": 29.350000381469727,
+          "z": 0
+        }
+      ]
+    },
+    {
+      "fromNodeId": "S_B",
+      "toNodeId": "S_A",
+      "bodyPoints": [
+        {
+          "x": 4.330127,
+          "y": 29.350000381469727,
+          "z": -2.5
+        },
+        {
+          "x": 0,
+          "y": 29.350000381469727,
+          "z": 5
+        }
+      ]
+    },
+    {
+      "fromNodeId": "S_B",
+      "toNodeId": "S_C",
+      "bodyPoints": [
+        {
+          "x": 4.330127,
+          "y": 29.350000381469727,
+          "z": -2.5
+        },
+        {
+          "x": -4.330127,
+          "y": 29.350000381469727,
+          "z": -2.5
+        }
+      ]
+    },
+    {
+      "fromNodeId": "S_C",
+      "toNodeId": "S_0",
+      "bodyPoints": [
+        {
+          "x": -4.330127,
+          "y": 29.350000381469727,
+          "z": -2.5
+        },
+        {
+          "x": 0,
+          "y": 29.350000381469727,
+          "z": 0
+        }
+      ]
+    },
+    {
+      "fromNodeId": "S_C",
+      "toNodeId": "S_A",
+      "bodyPoints": [
+        {
+          "x": -4.330127,
+          "y": 29.350000381469727,
+          "z": -2.5
+        },
+        {
+          "x": 0,
+          "y": 29.350000381469727,
+          "z": 5
+        }
+      ]
+    },
+    {
+      "fromNodeId": "S_C",
+      "toNodeId": "S_B",
+      "bodyPoints": [
+        {
+          "x": -4.330127,
+          "y": 29.350000381469727,
+          "z": -2.5
+        },
+        {
+          "x": 4.330127,
+          "y": 29.350000381469727,
+          "z": -2.5
+        }
+      ]
+    }
+  ],
+  "safeFallbackOrder": [
+    "S_0"
+  ],
+  "blockerColliderNames": [
+    "GroundSurface",
+    "TowerCore",
+    "FaceA_SupportLeg",
+    "GroundPattern_A",
+    "FaceB_SupportLeg",
+    "GroundPattern_B_Left",
+    "GroundPattern_B_Right",
+    "FaceC_SupportLeg",
+    "GroundPattern_C_Left",
+    "GroundPattern_C_Right",
+    "LowerAccess_Frame_Left",
+    "LowerAccess_Frame_Right",
+    "LowerAccess_Rung_2",
+    "LowerAccess_Rung_5",
+    "LowerAccess_Rung_8",
+    "LowerAccess_Rung_11",
+    "LowerAccess_Rung_14",
+    "LowerAccess_Rung_17",
+    "LowerAccess_Rung_20",
+    "LowerAccess_Rung_23",
+    "LowerAccess_Rung_26"
+  ],
+  "supportColliderNames": [
+    "UpperSafeZone_Deck_Support",
+    "S_0",
+    "S_A",
+    "S_B",
+    "S_C"
+  ],
+  "presentationColliderNames": [
+    "UpperPattern_A",
+    "UpperPattern_B_Left",
+    "UpperPattern_B_Right",
+    "UpperPattern_C_Left",
+    "UpperPattern_C_Right"
+  ],
+  "colliderSelectors": [
+    {
+      "key": "GroundPattern_A",
+      "colliderName": "FaceA_Pattern_Vertical",
+      "expectedWorldPosition": {
+        "x": 0,
+        "y": 0.34,
+        "z": 10.5
+      }
+    },
+    {
+      "key": "GroundPattern_B_Left",
+      "colliderName": "FaceB_Pattern_Left",
+      "expectedWorldPosition": {
+        "x": 9.09326649,
+        "y": 0.34,
+        "z": -5.25
+      }
+    },
+    {
+      "key": "GroundPattern_B_Right",
+      "colliderName": "FaceB_Pattern_Right",
+      "expectedWorldPosition": {
+        "x": 9.09326649,
+        "y": 0.34,
+        "z": -5.25
+      }
+    },
+    {
+      "key": "GroundPattern_C_Left",
+      "colliderName": "FaceC_Pattern_Left",
+      "expectedWorldPosition": {
+        "x": -8.904266,
+        "y": 0.34,
+        "z": -5.577358
+      }
+    },
+    {
+      "key": "GroundPattern_C_Right",
+      "colliderName": "FaceC_Pattern_Right",
+      "expectedWorldPosition": {
+        "x": -9.282267,
+        "y": 0.34,
+        "z": -4.922642
+      }
+    },
+    {
+      "key": "UpperPattern_A",
+      "colliderName": "FaceA_Pattern_Vertical",
+      "expectedWorldPosition": {
+        "x": 0,
+        "y": 28.41,
+        "z": 5
+      }
+    },
+    {
+      "key": "UpperPattern_B_Left",
+      "colliderName": "FaceB_Pattern_Left",
+      "expectedWorldPosition": {
+        "x": 4.330127,
+        "y": 28.41,
+        "z": -2.5
+      }
+    },
+    {
+      "key": "UpperPattern_B_Right",
+      "colliderName": "FaceB_Pattern_Right",
+      "expectedWorldPosition": {
+        "x": 4.330127,
+        "y": 28.41,
+        "z": -2.5
+      }
+    },
+    {
+      "key": "UpperPattern_C_Left",
+      "colliderName": "FaceC_Pattern_Left",
+      "expectedWorldPosition": {
+        "x": -4.190127,
+        "y": 28.41,
+        "z": -2.74248719
+      }
+    },
+    {
+      "key": "UpperPattern_C_Right",
+      "colliderName": "FaceC_Pattern_Right",
+      "expectedWorldPosition": {
+        "x": -4.47012663,
+        "y": 28.41,
+        "z": -2.25751281
+      }
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "LastWatch.Telemetry.Tests.EditMode",
+  "rootNamespace": "LastWatch.Telemetry.Tests",
+  "references": [
+    "LastWatch.Core",
+    "LastWatch.Telemetry"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false,
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}

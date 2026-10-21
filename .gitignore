@@ -1,0 +1,44 @@
+# Unity generated state
+**/[Ll]ibrary/
+**/[Tt]emp/
+**/[Oo]bj/
+**/[Ll]ogs/
+**/[Bb]uild/
+**/[Bb]uilds/
+**/[Uu]ser[Ss]ettings/
+**/MemoryCaptures/
+**/Recordings/
+**/InitTestScene*.unity*
+
+# IDE / OS
+**/.vs/
+**/.idea/
+**/.vscode/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.pdb
+*.mdb
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local secrets, saves and capture output
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.keystore
+*.jks
+*.log
+*.zip
+**/[Ss]aves/
+**/[Cc]aptures/
+tests/LastWatch/evidence/
+handoffs/

@@ -1,0 +1,14 @@
+<linker>
+  <assembly fullname="LastWatch.Core">
+    <!-- The bounded codec reads field-only DTOs via reflection; preserve that wire schema. -->
+    <type fullname="LastWatch.Core.Persistence.*" preserve="all" />
+    <type fullname="LastWatch.Core.Partner.PartnerRuntimeState" preserve="all" />
+    <type fullname="LastWatch.Core.Partner.FriendlyHitIncident" preserve="all" />
+    <type fullname="LastWatch.Core.Partner.ExchangeTransaction" preserve="all" />
+    <type fullname="LastWatch.Core.Partner.Data40Fact" preserve="all" />
+    <type fullname="LastWatch.Core.Partner.M4CoordinatorSave" preserve="all" />
+    <type fullname="LastWatch.Core.Partner.M4HarnessSaveSnapshot" preserve="all" />
+    <type fullname="LastWatch.Core.Partner.NightLossObservation" preserve="all" />
+    <type fullname="LastWatch.Core.Partner.M4LossTotals" preserve="all" />
+  </assembly>
+</linker>

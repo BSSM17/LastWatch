@@ -1,0 +1,31 @@
+{
+    "schemaVersion":  1,
+    "purpose":  "Lineage for deterministic M4 QA input plans; source tapes contribute command arrays only.",
+    "evidencePolicy":  "Source replay tapes and associated chat-copy evidence are not evidence inputs. Fresh Core captures and strict source-backed provenance are required.",
+    "commandsPreservedVerbatim":  true,
+    "frozenMarkerRemovedForPlanType":  true,
+    "dependencies":  [
+                         {
+                             "difficulty":  "normal",
+                             "planId":  "m4-normal-input-plan-v0.1",
+                             "planPath":  "tests/LastWatch/input-plans/normal-m4-input-plan-v0.1.json",
+                             "planSha256":  "B332F2E02DDA643403912153AA8A304275FA2DB85D45E2C962938F38E3A0E261",
+                             "commandCount":  13218,
+                             "sourceTapePath":  "tests/LastWatch/evidence/M4/owner-20260924-chat-supplement/normal-replay-input.json",
+                             "sourceTapeSha256":  "45E42BFAD202168C53BEE68D86A84ED1F28847D2FA166842898BAE76CAEACB8F",
+                             "sourceUse":  "COMMAND_STIMULUS_ONLY_NOT_EVIDENCE",
+                             "sourceCaptureProvenance":  "UNVERIFIED_CHAT_SUPPLEMENT; NOT USED TO AUTHENTICATE ANY CAPTURE OR REPLAY INPUT"
+                         },
+                         {
+                             "difficulty":  "hard",
+                             "planId":  "m4-hard-input-plan-v0.1",
+                             "planPath":  "tests/LastWatch/input-plans/hard-m4-input-plan-v0.1.json",
+                             "planSha256":  "A67E3713E6313A6807D5C1F1A070C207F0816CA572CF363C9325F486B2ED8B2B",
+                             "commandCount":  13966,
+                             "sourceTapePath":  "tests/LastWatch/evidence/M4/owner-20260924-chat-supplement/hard-replay-input.json",
+                             "sourceTapeSha256":  "4A78EB60422D10A7435B7011A4F81D8467EEBE16637FF24735499DBF13C17DC9",
+                             "sourceUse":  "COMMAND_STIMULUS_ONLY_NOT_EVIDENCE",
+                             "sourceCaptureProvenance":  "UNVERIFIED_CHAT_SUPPLEMENT; NOT USED TO AUTHENTICATE ANY CAPTURE OR REPLAY INPUT"
+                         }
+                     ]
+}

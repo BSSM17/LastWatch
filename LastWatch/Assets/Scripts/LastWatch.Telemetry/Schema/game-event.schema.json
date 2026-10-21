@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:last-watch:telemetry:game-event:1",
+  "title": "Last Watch T1 telemetry event envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "eventId", "sessionId", "runId", "buildId", "rulesetHash",
+    "contentVersion", "mode", "difficulty", "eventSequence", "simulationTick",
+    "night", "phase", "eventName", "payload"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "eventId": { "type": "string", "format": "uuid" },
+    "sessionId": { "type": "string", "format": "uuid" },
+    "runId": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+    "buildId": { "$ref": "#/$defs/nonPathToken" },
+    "rulesetHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "contentVersion": { "$ref": "#/$defs/nonPathToken" },
+    "mode": { "$ref": "#/$defs/nonPathToken" },
+    "difficulty": { "$ref": "#/$defs/nonPathToken" },
+    "eventSequence": { "type": "integer", "minimum": 1 },
+    "simulationTick": { "type": "integer", "minimum": 0 },
+    "night": { "type": ["integer", "null"], "minimum": 0 },
+    "phase": {
+      "enum": ["Dawn", "Scavenge", "Allocation", "Defense", "FinalCollapseWarning", "CollapseImpact", "Afterfall", "Ending", "TerminalOverrun", "TerminalAfterfall"]
+    },
+    "eventName": {
+      "enum": ["DamageApplied", "ActorStateChanged", "ActorDeathCommitted", "InvariantViolation", "TelemetryHealth"]
+    },
+    "payload": { "type": "object" }
+  },
+  "allOf": [
+    { "if": { "properties": { "eventName": { "const": "DamageApplied" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/damageApplied" } } } },
+    { "if": { "properties": { "eventName": { "const": "ActorStateChanged" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/actorStateChanged" } } } },
+    { "if": { "properties": { "eventName": { "const": "ActorDeathCommitted" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/actorDeathCommitted" } } } },
+    { "if": { "properties": { "eventName": { "const": "InvariantViolation" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/invariantViolation" } } } },
+    { "if": { "properties": { "eventName": { "const": "TelemetryHealth" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/telemetryHealth" } } } }
+  ],
+  "$defs": {
+    "nonPathToken": { "type": "string", "minLength": 1, "pattern": "^[^\\\\/\\r\\n]+$" },
+    "stableId": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+    "nullableStableId": { "type": ["string", "null"], "pattern": "^[0-9a-f]{16}$" },
+    "damageableKind": { "enum": ["Player", "Partner", "Enemy", "Structure"] },
+    "nullableDamageableKind": { "enum": ["Player", "Partner", "Enemy", "Structure", null] },
+    "damageKind": { "enum": ["Ballistic", "Melee", "Environment", "CollapseImpact", "AfterfallTimeoutHazard"] },
+    "lifeState": { "enum": ["Alive", "Healthy", "Injured", "Downed", "Stabilized", "Dead"] },
+    "damageApplied": {
+      "type": "object", "additionalProperties": false,
+      "required": ["amount", "becameResolved", "damageKind", "fireSequenceId", "hitPointsAfter", "hitPointsBefore", "instigatorEntityId", "sourceEntityId", "targetEntityId", "targetKind"],
+      "properties": {
+        "amount": { "type": "number" }, "becameResolved": { "type": "boolean" },
+        "damageKind": { "$ref": "#/$defs/damageKind" }, "fireSequenceId": { "$ref": "#/$defs/nullableStableId" },
+        "hitPointsAfter": { "type": "number" }, "hitPointsBefore": { "type": "number" },
+        "instigatorEntityId": { "$ref": "#/$defs/nullableStableId" }, "sourceEntityId": { "$ref": "#/$defs/nullableStableId" },
+        "targetEntityId": { "$ref": "#/$defs/stableId" }, "targetKind": { "$ref": "#/$defs/damageableKind" }
+      }
+    },
+    "actorStateChanged": {
+      "type": "object", "additionalProperties": false,
+      "required": ["actorId", "actorKind", "currentLifeState", "previousLifeState"],
+      "properties": {
+        "actorId": { "$ref": "#/$defs/stableId" }, "actorKind": { "enum": ["Player", "Partner"] },
+        "currentLifeState": { "$ref": "#/$defs/lifeState" }, "previousLifeState": { "$ref": "#/$defs/lifeState" }
+      }
+    },
+    "actorDeathCommitted": {
+      "type": "object", "additionalProperties": false,
+      "required": ["actorId", "actorKind", "deathCause", "deathSequence", "deathTick", "lethalDamageEventSequence", "lethalSourceActorKind", "lethalSourceEntityId", "previousLifeState"],
+      "properties": {
+        "actorId": { "$ref": "#/$defs/stableId" }, "actorKind": { "enum": ["Player", "Partner"] },
+        "deathCause": { "$ref": "#/$defs/damageKind" }, "deathSequence": { "$ref": "#/$defs/stableId" },
+        "deathTick": { "type": "integer", "minimum": 0 }, "lethalDamageEventSequence": { "$ref": "#/$defs/stableId" },
+        "lethalSourceActorKind": { "$ref": "#/$defs/nullableDamageableKind" }, "lethalSourceEntityId": { "$ref": "#/$defs/nullableStableId" },
+        "previousLifeState": { "enum": ["Alive", "Healthy", "Injured", "Downed", "Stabilized"] }
+      }
+    },
+    "invariantViolation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["classification", "invariantId"],
+      "properties": {
+        "classification": { "enum": ["CoreFactMismatch", "SchemaRejected", "OrderingViolation"] },
+        "invariantId": { "$ref": "#/$defs/nonPathToken" }
+      }
+    },
+    "telemetryHealth": {
+      "type": "object", "additionalProperties": false,
+      "required": ["condition", "droppedEventCount"],
+      "properties": {
+        "condition": { "enum": ["Healthy", "SinkException", "CapacityExceeded", "ValidationRejected"] },
+        "droppedEventCount": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

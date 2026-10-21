@@ -1,0 +1,46 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
+using LastWatch.Core.Identity;
+using LastWatch.Core.Space;
+
+namespace LastWatch.Core.Combat
+{
+    // Atomic M3 runtime snapshots, integrity hashing, and cross-component restore validation.
+    public sealed class M3DirectorSaveSnapshot
+    {
+        // v2 separates the immutable generated queue from mutable route/schedule state.
+        public int SchemaVersion { get; private set; } = 2;
+        public SpawnTicket[] OriginalTickets { get; private set; }
+        public EnemyDirectorRequest Request{get;private set;} public StoryQuantity Quantity{get;private set;} public string ImmutableQueueHash{get;private set;} public SpawnTicketSnapshot[] Tickets{get;private set;} public M3CoreFact[] Facts{get;private set;} public SpawnPressureSample[] RecentSpawnPressure{get;private set;} public int LedgerAsOfTick{get;private set;} public ulong NextFactSequence{get;private set;} public ulong AcknowledgedFactCursor{get;private set;}
+        internal static M3DirectorSaveSnapshot Create(EnemyDirectorQueue queue,EnemyDirectorRuntimeSnapshot state,M3CoreFact[] facts,Tuple<int,int>[] pressure,ulong next,ulong ack){var samples=new SpawnPressureSample[pressure.Length];for(int n=0;n<samples.Length;n++)samples[n]=new SpawnPressureSample(pressure[n].Item1,pressure[n].Item2);var originals=new SpawnTicket[queue.Tickets.Count];for(int n=0;n<originals.Length;n++)originals[n]=queue.Tickets[n];return new M3DirectorSaveSnapshot{OriginalTickets=originals,Request=queue.Request,Quantity=queue.Quantity,ImmutableQueueHash=queue.CanonicalHash(),Tickets=(SpawnTicketSnapshot[])state.Tickets.Clone(),Facts=(M3CoreFact[])facts.Clone(),RecentSpawnPressure=samples,LedgerAsOfTick=state.LedgerAsOfTick,NextFactSequence=next,AcknowledgedFactCursor=ack};}
+    }
+
+    public sealed class M3RuntimeSaveSnapshot
+    {
+        public const int AuthoritativeHashVersion = 2;
+        public M3DirectorSaveSnapshot Director{get;} public EnemyPoolSaveSnapshot Pool{get;} public RunnerCoordinatorSaveSnapshot Runners{get;} public M3FactJournalSaveSnapshot Facts{get;} public string AuthoritativeHash{get;}
+        private M3RuntimeSaveSnapshot(M3DirectorSaveSnapshot director,EnemyPoolSaveSnapshot pool,RunnerCoordinatorSaveSnapshot runners,M3FactJournalSaveSnapshot facts,string hash){Director=director;Pool=pool;Runners=runners;Facts=facts;AuthoritativeHash=hash;}
+        public static M3RuntimeSaveSnapshot Capture(EnemyDirectorRuntime director,EnemyPool pool,RunnerEvadeCoordinator runners,M3FactEmitter facts)
+        {if(director==null||pool==null||runners==null||facts==null)throw new ArgumentNullException();M3DirectorSaveSnapshot d=director.CaptureSave();EnemyPoolSaveSnapshot p=pool.CaptureSave();RunnerCoordinatorSaveSnapshot r=runners.CaptureSave();M3FactJournalSaveSnapshot f=facts.CaptureSave();return new M3RuntimeSaveSnapshot(d,p,r,f,Hash(d,p,r,f));}
+        public M3RuntimeRestoreResult Restore()
+        {if(Hash(Director,Pool,Runners,Facts)!=AuthoritativeHash)throw new FormatException("M3 runtime save hash mismatch.");ValidateCrossComponent(Director,Pool);M3FactEmitter facts=M3FactEmitter.Restore(Facts);EnemyDirectorRuntime director=EnemyDirectorRuntime.Restore(Director);RunnerEvadeCoordinator runners=RunnerEvadeCoordinator.Restore(Runners);director.AttachFactEmitter(facts);runners.AttachFactEmitter(facts);return new M3RuntimeRestoreResult(director,EnemyPool.Restore(Pool),runners,facts);}
+        private static string Hash(M3DirectorSaveSnapshot d,EnemyPoolSaveSnapshot p,RunnerCoordinatorSaveSnapshot r,M3FactJournalSaveSnapshot f)
+        {
+            // The legacy projection did not cover rerouted Face or postponed schedule.
+            var b = new StringBuilder("LW.M3.RUNTIME.v2|").Append(LegacyHash(d,p,r,f));
+            foreach (SpawnTicketSnapshot row in d.Tickets)
+                b.Append('|').Append((int)row.Ticket.Face).Append(':').Append(row.Ticket.ScheduledTick.ToString(CultureInfo.InvariantCulture));
+            using (SHA256 sha = SHA256.Create()) return EnemyArchetypeCatalog.Hex(sha.ComputeHash(Encoding.UTF8.GetBytes(b.ToString())));
+        }
+        private static string LegacyHash(M3DirectorSaveSnapshot d,EnemyPoolSaveSnapshot p,RunnerCoordinatorSaveSnapshot r,M3FactJournalSaveSnapshot f)
+        {var b=new StringBuilder();b.Append(d.ImmutableQueueHash).Append("|qty:").Append(d.Quantity.Total).Append(':').Append(d.Quantity.ActiveCap).Append(':').Append(d.Quantity.DensityPer10Seconds.ToString("R",CultureInfo.InvariantCulture)).Append("|ledger:").Append(d.LedgerAsOfTick).Append('|').Append(d.NextFactSequence).Append('|').Append(d.AcknowledgedFactCursor).Append('|').Append(f.GameplayHash).Append("|pool:").Append(p.VisibleCorpses).Append(':').Append(p.DeathFacts);foreach(SpawnTicketSnapshot x in d.Tickets)b.Append('|').Append(x.Ticket.TicketId.ToString("x16")).Append(':').Append((int)x.Lifecycle).Append(':').Append((int)x.BlockReason).Append(':').Append((int)x.MovementState).Append(':').Append(x.ActiveEntityId.HasValue?x.ActiveEntityId.Value.ToString():"-").Append(':').Append(x.ActualSpawnTick.HasValue?x.ActualSpawnTick.Value.ToString(CultureInfo.InvariantCulture):"-");foreach(M3CoreFact x in d.Facts)b.Append("|df:").Append((int)x.Kind).Append(':').Append(x.FixedTick).Append(':').Append(x.Sequence).Append(':').Append(x.TicketId.HasValue?x.TicketId.Value.ToString("x16"):"-").Append(':').Append(x.EntityId.HasValue?x.EntityId.Value.ToString():"-").Append(':').Append(x.FireSequenceId.HasValue?x.FireSequenceId.Value.ToString():"-").Append(':').Append(x.Detail.Length).Append('#').Append(x.Detail);foreach(SpawnPressureSample x in d.RecentSpawnPressure)b.Append("|p:").Append(x.FixedTick).Append(':').Append(x.PressureUnits);foreach(ulong id in p.Active)b.Append("|a:").Append(id.ToString("x16"));foreach(EntityId id in p.Available)b.Append("|v:").Append(id);foreach(EnemyPoolEvent x in p.Events)b.Append("|e:").Append((int)x.Kind).Append(':').Append(x.Tick).Append(':').Append(x.TicketId.ToString("x16")).Append(':').Append(x.EntityId.HasValue?x.EntityId.Value.ToString():"-");foreach(string key in r.ConsumedKeys)b.Append("|c:").Append(key);foreach(RunnerReservationSnapshot x in r.Reservations){RunnerReactionDecision q=x.Decision;b.Append("|r:").Append(x.RunnerId).Append(':').Append(x.FireSequenceId).Append(':').Append((int)x.Phase).Append(':').Append((int)x.SkipReason).Append(':').Append(q.ScheduledTick).Append(':').Append(q.CooldownUntilTick).Append(':').Append(q.MovementDurationTicks).Append(':').Append(q.LateralDistanceMeters.ToString("R",CultureInfo.InvariantCulture)).Append(':').Append(q.DirectionSign).Append(':').Append((int)q.Phase).Append(':').Append(q.SkipReason??"-").Append(':').Append(x.CooldownUntilTick).Append(':').Append(x.ReactionsThisApproach);}using(SHA256 sha=SHA256.Create())return EnemyArchetypeCatalog.Hex(sha.ComputeHash(Encoding.UTF8.GetBytes(b.ToString())));}
+        private static void ValidateCrossComponent(M3DirectorSaveSnapshot d,EnemyPoolSaveSnapshot p)
+        {var ticketIds=new HashSet<ulong>();var directorActive=new HashSet<ulong>();var activationRows=new Dictionary<string,int>();foreach(SpawnTicketSnapshot x in d.Tickets){if(!ticketIds.Add(x.Ticket.TicketId))throw new FormatException("Duplicate ticket identity.");if(x.Lifecycle==SpawnTicketLifecycle.Active){if(!x.ActiveEntityId.HasValue||!directorActive.Add(x.ActiveEntityId.Value.Value))throw new FormatException("Duplicate or missing active EntityId.");}else if(x.ActiveEntityId.HasValue)throw new FormatException("Only active tickets may own EntityIds.");if(x.ActualSpawnTick.HasValue){string key=x.ActualSpawnTick.Value+":"+M3PressureRules.UnitsFor(x.Ticket.Archetype);activationRows[key]=activationRows.TryGetValue(key,out int count)?count+1:1;}}var poolActive=new HashSet<ulong>(p.Active);if(!directorActive.SetEquals(poolActive))throw new FormatException("Director and pool active identities differ.");int previous=-1;foreach(SpawnPressureSample x in d.RecentSpawnPressure){if(x.FixedTick<previous||x.FixedTick<=d.LedgerAsOfTick-M3PressureRules.RollingWindowTicks||x.FixedTick>d.LedgerAsOfTick||(x.PressureUnits!=4&&x.PressureUnits!=5&&x.PressureUnits!=7&&x.PressureUnits!=12))throw new FormatException("Rolling pressure ledger is invalid.");previous=x.FixedTick;string key=x.FixedTick+":"+x.PressureUnits;if(!activationRows.TryGetValue(key,out int count)||count==0)throw new FormatException("Rolling pressure has no matching activation.");activationRows[key]=count-1;}ulong expected=1;foreach(M3CoreFact fact in d.Facts)if(fact.Sequence!=expected++)throw new FormatException("Director fact sequence gap or duplicate.");if(d.NextFactSequence!=expected||d.AcknowledgedFactCursor>=d.NextFactSequence)throw new FormatException("Director fact cursor is invalid.");}
+    }
+
+    public readonly struct M3RuntimeRestoreResult
+    {public EnemyDirectorRuntime Director{get;}public EnemyPool Pool{get;}public RunnerEvadeCoordinator Runners{get;}public M3FactEmitter Facts{get;}internal M3RuntimeRestoreResult(EnemyDirectorRuntime director,EnemyPool pool,RunnerEvadeCoordinator runners,M3FactEmitter facts){Director=director;Pool=pool;Runners=runners;Facts=facts;}}
+}
