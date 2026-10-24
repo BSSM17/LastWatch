@@ -8,6 +8,7 @@ namespace LastWatch.Core.Space
     public sealed class M2GrayboxBuilder : MonoBehaviour
     {
         private readonly List<Material> generatedMaterials = new List<Material>();
+        private readonly List<Mesh> generatedMeshes = new List<Mesh>();
 
         public TowerGeometryFixture Geometry { get; private set; }
 
@@ -44,7 +45,8 @@ namespace LastWatch.Core.Space
                 new Vector3(TowerGeometryFixture.UpperDeckRadius * 2f, 0.25f,
                     TowerGeometryFixture.UpperDeckRadius * 2f), safe);
             Tag(upperDeck, M2GrayboxColliderKind.UpperSurface, null);
-            ConfigureUpperDeckSupport(upperDeck);
+            if(geometry.ManualAccess==null)ConfigureUpperDeckSupport(upperDeck);
+            else CreateManualDeckOpening(upperDeck,geometry.ManualAccess,safe);
 
             foreach (FaceId face in (FaceId[])Enum.GetValues(typeof(FaceId)))
             {
@@ -67,7 +69,8 @@ namespace LastWatch.Core.Space
                     direction * TowerGeometryFixture.GroundJointRadius + Vector3.up * 0.18f, pattern, 1.35f);
             }
 
-            CreateLowerAccessFrame(structure, interaction);
+            if(geometry.ManualAccess==null)CreateLowerAccessFrame(structure,interaction);
+            else CreateManualAccess(geometry.ManualAccess,structure,interaction);
 
             foreach (StationDescriptor station in geometry.Stations)
             {
@@ -172,6 +175,94 @@ namespace LastWatch.Core.Space
             GameObject bar = CreatePrimitive(objectName, PrimitiveType.Cube, position,
                 new Vector3(0.2f * scale, 0.07f, 1.35f * scale), material);
             bar.transform.rotation = Quaternion.Euler(0f, yaw + offsetYaw, 0f);
+        }
+
+        private void CreateManualAccess(M4ManualTraversalAccess access, Material structure, Material interaction)
+        {
+            for(int i=0;i<access.Nodes.Count;i++)
+            {
+                // Existing station platform thickness. Tag honestly as solid Structure;
+                // do not bypass capsule guards by declaring new UpperSurface geometry.
+                var landing=CreatePrimitive("QA_AccessLanding_"+i,PrimitiveType.Cube,
+                    access.LandingSurfaceCenter(i)-Vector3.up*0.1f,
+                    new Vector3(M4ManualTraversalAccess.Width,0.2f,M4ManualTraversalAccess.Width*0.5f),interaction);
+                landing.transform.rotation=Quaternion.LookRotation(access.Outward,Vector3.up);
+                Tag(landing,M2GrayboxColliderKind.Structure,null);
+                if(i+1<access.Nodes.Count)
+                {
+                    Vector3 a=access.Nodes[i], b=access.Nodes[i+1], side=access.Side*(M4ManualTraversalAccess.Width*0.5f);
+                    Vector3[] top={a-side,a+side,b+side,b-side};
+                    var vertices=new List<Vector3>();var indices=new List<int>();
+                    AddQuad(vertices,indices,top[3],top[2],top[1],top[0]);
+                    AddQuad(vertices,indices,top[0]-Vector3.up*0.2f,top[1]-Vector3.up*0.2f,top[2]-Vector3.up*0.2f,top[3]-Vector3.up*0.2f);
+                    for(int edge=0;edge<4;edge++)AddQuad(vertices,indices,top[edge],top[(edge+1)%4],top[(edge+1)%4]-Vector3.up*0.2f,top[edge]-Vector3.up*0.2f);
+                    var support=CreateOwnedMesh("QA_AccessConnector_"+i,vertices,indices,structure);
+                    Tag(support,M2GrayboxColliderKind.Structure,null);
+                    CreateLine("QA_NormalTraversal_"+i,new[]{access.OriginAt(i),access.OriginAt(i+1)},0.14f,interaction);
+                }
+            }
+        }
+
+        private void CreateManualDeckOpening(GameObject deck,M4ManualTraversalAccess access,Material material)
+        {
+            // Clip the actual primitive mesh, preserving its outer footprint. The only
+            // removed solid is the opted-in access notch, not the whole upper floor.
+            Mesh source=deck.GetComponent<MeshFilter>().sharedMesh;
+            Vector3[] original=source.vertices;int[] triangles=source.triangles;
+            var vertices=new[]{new List<Vector3>(),new List<Vector3>(),new List<Vector3>()};
+            var indices=new[]{new List<int>(),new List<int>(),new List<int>()};
+            for(int n=0;n<triangles.Length;n+=3)
+            {
+                var triangle=new List<Vector3>{deck.transform.TransformPoint(original[triangles[n]]),
+                    deck.transform.TransformPoint(original[triangles[n+1]]),deck.transform.TransformPoint(original[triangles[n+2]])};
+                AddPolygon(vertices[0],indices[0],Clip(triangle,access.Outward,access.OpeningStart,true));
+                var outward=Clip(triangle,access.Outward,access.OpeningStart,false);
+                AddPolygon(vertices[1],indices[1],Clip(outward,access.Side,-M4ManualTraversalAccess.Width*0.5f,true));
+                AddPolygon(vertices[2],indices[2],Clip(outward,access.Side,M4ManualTraversalAccess.Width*0.5f,false));
+            }
+            deck.GetComponent<Collider>().enabled=false;deck.GetComponent<Renderer>().enabled=false;
+            // Keep each cell's clipped half-space input separate instead of cooking
+            // one hull across the notch. Native cooking/contact still requires QA.
+            // The main real cell retains the graph's single-convex support key.
+            string[] names={"UpperSafeZone_Deck_Support","QA_UpperDeck_AccessSideNegative","QA_UpperDeck_AccessSidePositive"};
+            for(int cell=0;cell<names.Length;cell++)
+            {
+                var support=CreateOwnedMesh(names[cell],vertices[cell],indices[cell],material);
+                support.GetComponent<MeshCollider>().convex=true;
+                Tag(support,M2GrayboxColliderKind.UpperSurface,null);
+            }
+        }
+
+        static List<Vector3> Clip(List<Vector3> polygon,Vector3 normal,float offset,bool less)
+        {
+            var result=new List<Vector3>();if(polygon.Count==0)return result;
+            Vector3 prior=polygon[polygon.Count-1];float priorDistance=Vector3.Dot(prior,normal)-offset;
+            bool priorInside=less?priorDistance<=0f:priorDistance>=0f;
+            foreach(Vector3 point in polygon)
+            {
+                float distance=Vector3.Dot(point,normal)-offset;bool inside=less?distance<=0f:distance>=0f;
+                if(inside!=priorInside)result.Add(Vector3.Lerp(prior,point,priorDistance/(priorDistance-distance)));
+                if(inside)result.Add(point);
+                prior=point;priorDistance=distance;priorInside=inside;
+            }
+            return result;
+        }
+        static void AddPolygon(List<Vector3> vertices,List<int> indices,List<Vector3> polygon)
+        {
+            for(int i=1;i+1<polygon.Count;i++)
+            {if(Vector3.Cross(polygon[i]-polygon[0],polygon[i+1]-polygon[0]).sqrMagnitude==0f)continue;
+                int start=vertices.Count;vertices.Add(polygon[0]);vertices.Add(polygon[i]);vertices.Add(polygon[i+1]);indices.Add(start);indices.Add(start+1);indices.Add(start+2);}
+        }
+        static void AddQuad(List<Vector3> vertices,List<int> indices,Vector3 a,Vector3 b,Vector3 c,Vector3 d)
+            =>AddPolygon(vertices,indices,new List<Vector3>{a,b,c,d});
+        GameObject CreateOwnedMesh(string name,List<Vector3> vertices,List<int> indices,Material material)
+        {
+            var value=new GameObject(name);value.transform.SetParent(transform,false);
+            var local=new Vector3[vertices.Count];for(int i=0;i<local.Length;i++)local[i]=transform.InverseTransformPoint(vertices[i]);
+            var mesh=new Mesh{name=name};mesh.vertices=local;mesh.triangles=indices.ToArray();mesh.RecalculateNormals();mesh.RecalculateBounds();
+            generatedMeshes.Add(mesh);value.AddComponent<MeshFilter>().sharedMesh=mesh;
+            value.AddComponent<MeshRenderer>().sharedMaterial=material;value.AddComponent<MeshCollider>().sharedMesh=mesh;
+            return value;
         }
 
         private void CreateLowerAccessFrame(Material structure, Material interaction)
@@ -284,6 +375,7 @@ namespace LastWatch.Core.Space
             for (int index = 0; index < transform.childCount; index++)
                 owned.Add(transform.GetChild(index).gameObject);
             owned.AddRange(generatedMaterials);
+            owned.AddRange(generatedMeshes);
             return owned.ToArray();
         }
 
@@ -302,6 +394,9 @@ namespace LastWatch.Core.Space
                 if (Application.isPlaying) Destroy(material); else DestroyImmediate(material);
             }
             generatedMaterials.Clear();
+            foreach(Mesh mesh in generatedMeshes)
+                if(mesh!=null){if(Application.isPlaying)Destroy(mesh);else DestroyImmediate(mesh);}
+            generatedMeshes.Clear();
         }
     }
 

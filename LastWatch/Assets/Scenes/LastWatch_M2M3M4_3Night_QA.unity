@@ -199,5 +199,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6a32bb2f5c0e4b3f9a1d67c0a2039b7e, type: 3}
   m_Name:
   m_EditorClassIdentifier:
-  qaPartnerMovementProfileAsset: {fileID: 4900000, guid: 4f56f692b5df4f8893117cab237080ad, type: 3}
+  qaPartnerMovementProfileAsset: {fileID: 4900000, guid: c71e4ae1c9a8453eb8ed3f1e0d688328, type: 3}
   qaPartnerExchangePolicyAsset: {fileID: 4900000, guid: a13966ca9951455bb59a693b849d4107, type: 3}
+  qaPlayerPartsFixtureAsset: {fileID: 4900000, guid: 8dc4a67a19f74e509a69252d573492d1, type: 3}
+  qaEnableManualTraversal: 1

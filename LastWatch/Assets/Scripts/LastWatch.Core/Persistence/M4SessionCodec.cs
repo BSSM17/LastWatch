@@ -44,7 +44,7 @@ namespace LastWatch.Core.Persistence
         public string format; public int schema; public int hashVersion; public string profile; public string seedAlgorithm; public string queueAlgorithm; public int ruleset;
         public ulong runId; public ulong runSeed; public LastWatchDifficulty difficulty; public string rulesetHash; public string contentVersion;
         public ulong generation; public M4SessionStage stage; public int completedNights; public int snapshotTick; public int? nightStartTick;
-        public string runtimeCoverage; public RunStateV2Dto run; public PartnerRuntimeState partner; public M4PlayerWeaponActionSaveState playerWeaponAction;
+        public string runtimeCoverage; public RunStateV2Dto run; public PartnerRuntimeState partner; public M4PlayerWeaponActionSaveState playerWeaponAction; public M4PlayerResourceInventory playerResources;
         public M4EntryDto[] entries; public M4TopologyDto topology; public M4CombatDto combat;
         public M4CoordinatorSave coordinator; public M4HarnessSaveSnapshot harness; public M4ContextStampDto[] contexts;
         public ulong[] completionRunFactCursors; public string gameplayHash; public string resumeHash; public string integrityHash;
@@ -78,14 +78,15 @@ namespace LastWatch.Core.Persistence
     public static class M4SessionJson
     {
         public const string Format = "LW.M4.BOUNDED.SESSION";
-        public const string RuntimeCoverage = "CORE_CONTRACT_PLAYER_WEAPON_ACTION_PARTNER_MOTION_EXCHANGE_INTENT_RECEIPTS_NO_WHOLE_ACTOR_OR_WEAPON_PATH_CONTINUATION";
+        public const string RuntimeCoverage = "CORE_CONTRACT_PLAYER_RESOURCES_PLAYER_WEAPON_ACTION_PARTNER_MOTION_EXCHANGE_INTENT_RECEIPTS_NO_WHOLE_ACTOR_OR_WEAPON_PATH_CONTINUATION";
+        const string BeforeResourcesRuntimeCoverage = "CORE_CONTRACT_PLAYER_WEAPON_ACTION_PARTNER_MOTION_EXCHANGE_INTENT_RECEIPTS_NO_WHOLE_ACTOR_OR_WEAPON_PATH_CONTINUATION";
         const string BeforeExchangeRuntimeCoverage = "CORE_CONTRACT_PLAYER_WEAPON_ACTION_PARTNER_MOTION_RECEIPTS_NO_WHOLE_ACTOR_OR_WEAPON_PATH_CONTINUATION";
         const string BeforePartnerMovementRuntimeCoverage = "CORE_CONTRACT_ONLY_PLAYER_WEAPON_ACTION_NO_ACTOR_TRANSFORMS_OR_WEAPON_PATH_CONTINUATION";
         const string LegacyRuntimeCoverage = "CORE_CONTRACT_ONLY_NO_ACTOR_TRANSFORMS_WEAPON_PATH_CONTINUATION";
         public static string Serialize(M4Session session, bool pretty = false)
         { if(session==null)throw new ArgumentNullException(nameof(session));return Encode(session.CaptureDto(),pretty); }
         internal static string Encode(M4SessionDto dto,bool pretty=false)
-        { Seal(dto);return JsonUtility.ToJson(new M4FlatWireDto{format=Format,schemaVersion=7,payloadFlat=M4ValueCodec.Flatten(M4ValueCodec.Encode(dto))},pretty); }
+        { Seal(dto);return JsonUtility.ToJson(new M4FlatWireDto{format=Format,schemaVersion=8,payloadFlat=M4ValueCodec.Flatten(M4ValueCodec.Encode(dto))},pretty); }
         public static M4LoadResult TryDeserialize(string json, M4RestorePurpose purpose = M4RestorePurpose.PlayableContinuation)
         {
             var result=new M4LoadResult{OriginalJson=json};
@@ -143,6 +144,13 @@ namespace LastWatch.Core.Persistence
                 else if (header.schemaVersion == 7)
                 {
                     M4FlatWireDto flat=JsonUtility.FromJson<M4FlatWireDto>(json);
+                    d=M4ValueCodec.DecodeBeforePlayerResources<M4SessionDto>(M4ValueCodec.Inflate(flat.payloadFlat));
+                    VerifyBeforePlayerResourcesHashes(d);
+                    d.runtimeCoverage=RuntimeCoverage;Seal(d);
+                }
+                else if (header.schemaVersion == 8)
+                {
+                    M4FlatWireDto flat=JsonUtility.FromJson<M4FlatWireDto>(json);
                     d=M4ValueCodec.Decode<M4SessionDto>(M4ValueCodec.Inflate(flat.payloadFlat));
                 }
                 else {result.Status=M4LoadStatus.UnsupportedSchema;result.Reason="Unsupported M4 envelope version.";return result;}
@@ -161,10 +169,19 @@ namespace LastWatch.Core.Persistence
         {
             if(d==null||d.schema!=3||d.runtimeCoverage!=RuntimeCoverage)throw new FormatException("Unsupported M4 session schema/coverage.");
             if(d.playerWeaponAction!=null)d.playerWeaponAction.Validate();
+            if(d.playerResources!=null)d.playerResources.Validate();
             d.gameplayHash=M4SessionHashes.Gameplay(d);d.resumeHash=M4SessionHashes.Resume(d);d.integrityHash=M4SessionHashes.Integrity(d);
         }
         internal static void VerifyHashes(M4SessionDto d)
         {if(d.format!=Format||d.runtimeCoverage!=RuntimeCoverage||d.gameplayHash!=M4SessionHashes.Gameplay(d)||d.resumeHash!=M4SessionHashes.Resume(d)||d.integrityHash!=M4SessionHashes.Integrity(d))throw new FormatException("Session hash/coverage mismatch.");}
+        static void VerifyBeforePlayerResourcesHashes(M4SessionDto d)
+        {
+            if(d.format!=Format||d.schema!=3||d.hashVersion!=1||d.runtimeCoverage!=BeforeResourcesRuntimeCoverage||d.playerResources!=null||
+                d.gameplayHash!=M4SessionHashes.Gameplay(d,false,false,true)||
+                d.resumeHash!=M4SessionHashes.Resume(d,false,false,true)||
+                d.integrityHash!=M4SessionHashes.Integrity(d,false,false,true))
+                throw new FormatException("Pre-resource original session hash/coverage mismatch.");
+        }
         static void VerifyBeforePartnerExchangeHashes(M4SessionDto d)
         {
             if (d.format != Format || d.schema != 3 || d.hashVersion != 1 || d.runtimeCoverage != BeforeExchangeRuntimeCoverage ||
@@ -201,12 +218,12 @@ namespace LastWatch.Core.Persistence
                 return receipt != null && legacy.runId == expectedRunId.Value && receipt.RunId.Equals(expectedRunId) &&
                     receipt.Generation == legacy.generation && receipt.Stage == legacy.stage && receipt.Digest == legacy.integrityHash;
             }
-            if (header.schemaVersion != 5 && header.schemaVersion != 6 && header.schemaVersion != 7) return false;
+            if (header.schemaVersion != 5 && header.schemaVersion != 6 && header.schemaVersion != 7 && header.schemaVersion != 8) return false;
             var flat = JsonUtility.FromJson<M4FlatWireDto>(json); var raw = M4ValueCodec.Inflate(flat.payloadFlat);
             bool old = header.schemaVersion == 5 && M4ValueCodec.HasBeforePartnerMovementShape(raw);
             if (header.schemaVersion == 5 && !old) throw new FormatException("Envelope5 requires the exact pre-navigation Partner layout.");
-            var source = old ? M4ValueCodec.DecodeBeforePartnerMovement<M4SessionDto>(raw) : header.schemaVersion == 6 ? M4ValueCodec.DecodeBeforePartnerExchange<M4SessionDto>(raw) : M4ValueCodec.Decode<M4SessionDto>(raw);
-            if (old) VerifyBeforePartnerMovementHashes(source); else if (header.schemaVersion == 6) VerifyBeforePartnerExchangeHashes(source); else VerifyHashes(source);
+            var source = old ? M4ValueCodec.DecodeBeforePartnerMovement<M4SessionDto>(raw) : header.schemaVersion == 6 ? M4ValueCodec.DecodeBeforePartnerExchange<M4SessionDto>(raw) : header.schemaVersion == 7 ? M4ValueCodec.DecodeBeforePlayerResources<M4SessionDto>(raw) : M4ValueCodec.Decode<M4SessionDto>(raw);
+            if (old) VerifyBeforePartnerMovementHashes(source); else if (header.schemaVersion == 6) VerifyBeforePartnerExchangeHashes(source); else if (header.schemaVersion == 7) VerifyBeforePlayerResourcesHashes(source); else VerifyHashes(source);
             return receipt != null && source.runId == expectedRunId.Value && receipt.Generation == source.generation &&
                 receipt.RunId.Equals(expectedRunId) && receipt.Stage == source.stage && receipt.Digest == source.integrityHash;
         }
@@ -256,22 +273,22 @@ namespace LastWatch.Core.Persistence
         }
         public static string Gameplay(M4Session session)=>Gameplay(session.CaptureDto());
         public static string Resume(M4Session session)=>Resume(session.CaptureDto());
-        internal static string Gameplay(M4SessionDto source, bool beforePartnerMovement = false, bool beforePartnerExchange = false)
+        internal static string Gameplay(M4SessionDto source, bool beforePartnerMovement = false, bool beforePartnerExchange = false, bool beforePlayerResources = false)
         {
             M4SessionDto d=Base(source);d.generation=0;d.harness=null;d.coordinator=null;d.contexts=null;d.completionRunFactCursors=null;
             d.run.committedFacts=null;d.run.committedFactAcknowledgedCursor=null;d.run.cosmeticRng=null;
             d.partner.Data40Facts=null;d.partner.Data40AcknowledgedCursor=0;d.partner.NextData40Cursor=0;
             if(d.combat!=null){d.combat.directorFacts=null;d.combat.projectionFacts=null;d.combat.directorAck=0;d.combat.projectionAck=0;d.combat.directorNext=0;d.combat.projectionNext=0;d.combat.corpses=0;d.combat.poolEvents=null;}
-            return M4ValueCodec.Hash("LW.M4.SessionGameplay.v1", beforePartnerMovement ? M4ValueCodec.EncodeBeforePartnerMovement(d) : beforePartnerExchange ? M4ValueCodec.EncodeBeforePartnerExchange(d) : M4ValueCodec.Encode(d));
+            return M4ValueCodec.Hash("LW.M4.SessionGameplay.v1", beforePartnerMovement ? M4ValueCodec.EncodeBeforePartnerMovement(d) : beforePartnerExchange ? M4ValueCodec.EncodeBeforePartnerExchange(d) : beforePlayerResources ? M4ValueCodec.EncodeBeforePlayerResources(d) : M4ValueCodec.Encode(d));
         }
-        internal static string Resume(M4SessionDto source, bool beforePartnerMovement = false, bool beforePartnerExchange = false)
+        internal static string Resume(M4SessionDto source, bool beforePartnerMovement = false, bool beforePartnerExchange = false, bool beforePlayerResources = false)
         {
             M4SessionDto d=Base(source);d.generation=0;d.run.committedFactAcknowledgedCursor="0000000000000000";d.partner.Data40AcknowledgedCursor=0;
             if(d.combat!=null){d.combat.directorAck=0;d.combat.projectionAck=0;}
-            return M4ValueCodec.Hash("LW.M4.SessionResume.v1", beforePartnerMovement ? M4ValueCodec.EncodeBeforePartnerMovement(d) : beforePartnerExchange ? M4ValueCodec.EncodeBeforePartnerExchange(d) : M4ValueCodec.Encode(d));
+            return M4ValueCodec.Hash("LW.M4.SessionResume.v1", beforePartnerMovement ? M4ValueCodec.EncodeBeforePartnerMovement(d) : beforePartnerExchange ? M4ValueCodec.EncodeBeforePartnerExchange(d) : beforePlayerResources ? M4ValueCodec.EncodeBeforePlayerResources(d) : M4ValueCodec.Encode(d));
         }
-        internal static string Integrity(M4SessionDto source, bool beforePartnerMovement = false, bool beforePartnerExchange = false)
-        {M4SessionDto d=M4ValueCodec.Copy(source);d.integrityHash=null;return M4ValueCodec.Hash("LW.M4.SaveIntegrity.v1", beforePartnerMovement ? M4ValueCodec.EncodeBeforePartnerMovement(d) : beforePartnerExchange ? M4ValueCodec.EncodeBeforePartnerExchange(d) : M4ValueCodec.Encode(d));}
+        internal static string Integrity(M4SessionDto source, bool beforePartnerMovement = false, bool beforePartnerExchange = false, bool beforePlayerResources = false)
+        {M4SessionDto d=M4ValueCodec.Copy(source);d.integrityHash=null;return M4ValueCodec.Hash("LW.M4.SaveIntegrity.v1", beforePartnerMovement ? M4ValueCodec.EncodeBeforePartnerMovement(d) : beforePartnerExchange ? M4ValueCodec.EncodeBeforePartnerExchange(d) : beforePlayerResources ? M4ValueCodec.EncodeBeforePlayerResources(d) : M4ValueCodec.Encode(d));}
         static M4SessionDto Base(M4SessionDto source)
         {M4SessionDto d=M4ValueCodec.Copy(source);d.gameplayHash=null;d.resumeHash=null;d.integrityHash=null;return d;}
 

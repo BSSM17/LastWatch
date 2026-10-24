@@ -49,6 +49,26 @@ namespace LastWatch.Core.Traversal
         private int totalTicks;
         private Vector3 start;
         private Vector3 end;
+        readonly M4ManualTraversalAccess manualAccess;
+        readonly int tickRate=60;
+        readonly bool automaticManual;
+        Vector3[] manualPath;
+        TraversalPlatformNodeId[] manualNodeIds;
+        float[] manualDistances;
+        int manualPassedIndex;
+        Vector3 manualPosition;
+        TraversalState interruptedDirection;
+        public bool HasInterruptedManualRoute => manualAccess!=null&&interruptedDirection!=TraversalState.None;
+        public string LastManualAbortReason { get; private set; }
+        public void ObserveManualEndpointWalk(Vector3 actualOrigin)
+        {
+            if(state!=TraversalState.None||!HasInterruptedManualRoute||
+                (lastPassedNode!=TraversalPlatformNodeId.UpperDeck&&lastPassedNode!=TraversalPlatformNodeId.GroundLanding))return;
+            if(actualOrigin.Equals(manualPosition))return;
+            // A real walk on an ordinary endpoint ends stale interrupted intent;
+            // intermediate landing continuation and remaining ticks are untouched.
+            interruptedDirection=TraversalState.None;elapsedTicks=0;totalTicks=0;manualPosition=actualOrigin;
+        }
 
         public TraversalController()
         {
@@ -65,8 +85,96 @@ namespace LastWatch.Core.Traversal
 
         public TraversalSnapshot Snapshot => CreateSnapshot();
 
+        public ManualTraversalEntryEvaluation EvaluateManualEntry(Vector3 actualOrigin)
+        {
+            if(manualAccess==null)return new ManualTraversalEntryEvaluation(false,false,-1,"입구를 확인할 수 없습니다");
+            if(state!=TraversalState.None)return new ManualTraversalEntryEvaluation(false,state==TraversalState.Ascending,-1,"이동 중입니다");
+            if(HasInterruptedManualRoute)
+                return new ManualTraversalEntryEvaluation(actualOrigin.Equals(manualPosition),interruptedDirection==TraversalState.Ascending,
+                    (int)lastPassedNode,actualOrigin.Equals(manualPosition)?null:"복귀 발판 위치를 확인하세요",true);
+            return manualAccess.EvaluateNormalEntry(actualOrigin);
+        }
+
+        public TraversalController(int ticksPerSecond,M4ManualTraversalAccess access) : this(ticksPerSecond,access,false) {}
+
+        public TraversalController(int ticksPerSecond,M4ManualTraversalAccess access,bool automatic) : this()
+        {
+            if(ticksPerSecond<=0)throw new ArgumentOutOfRangeException(nameof(ticksPerSecond));
+            manualAccess=access??throw new ArgumentNullException(nameof(access));tickRate=ticksPerSecond;
+            automaticManual=automatic;
+            manualPosition=access.OriginAt(0);
+        }
+        public TraversalCommandStatus BeginManualNormal(Vector3 actualOrigin,bool ascend)
+        {
+            if(manualAccess==null)throw new InvalidOperationException("Explicit manual access required.");
+            if(state!=TraversalState.None)return TraversalCommandStatus.RejectedBusy;
+            var entry=EvaluateManualEntry(actualOrigin);
+            if(!entry.Eligible)return TraversalCommandStatus.RejectedInvalidZone;
+            if(HasInterruptedManualRoute)
+            {
+                if(!actualOrigin.Equals(manualPosition))return TraversalCommandStatus.RejectedInvalidZone;
+                state=interruptedDirection;interruptedDirection=TraversalState.None;
+                return TraversalCommandStatus.Started;
+            }
+            if(entry.Ascending!=ascend)return TraversalCommandStatus.RejectedInvalidZone;
+            state=ascend?TraversalState.Ascending:TraversalState.Descending;
+            totalTicks=checked((ascend?6:automaticManual?1:3)*tickRate);elapsedTicks=0;manualPassedIndex=0;
+            manualPath=new Vector3[5];manualNodeIds=new TraversalPlatformNodeId[5];manualDistances=new float[5];
+            manualPath[0]=actualOrigin;manualNodeIds[0]=ascend?TraversalPlatformNodeId.GroundLanding:TraversalPlatformNodeId.UpperDeck;
+            for(int i=0;i<4;i++)
+            {
+                int index=ascend?3-i:i;manualPath[i+1]=manualAccess.OriginAt(index);
+                manualNodeIds[i+1]=(TraversalPlatformNodeId)index;
+                manualDistances[i+1]=manualDistances[i]+Vector3.Distance(manualPath[i],manualPath[i+1]);
+            }
+            manualPosition=actualOrigin;lastPassedNode=manualNodeIds[0];
+            zone=ascend?LocationZone.GroundDanger:LocationZone.UpperSafeZone;
+            return TraversalCommandStatus.Started;
+        }
+
+        TraversalStepStatus AdvanceManual(bool inputHeld,bool largeDamage)
+        {
+            if((!automaticManual&&!inputHeld)||largeDamage)
+            {
+                ReturnManualToPassedNode();
+                return largeDamage?TraversalStepStatus.InterruptedLargeDamage:TraversalStepStatus.InterruptedInputReleased;
+            }
+            elapsedTicks++;
+            float distance=manualDistances[4]*Mathf.Clamp01((float)elapsedTicks/totalTicks);
+            while(manualPassedIndex<4&&manualDistances[manualPassedIndex+1]<=distance)
+                manualPassedIndex++;
+            lastPassedNode=manualNodeIds[manualPassedIndex];
+            int segment=Math.Min(manualPassedIndex,3);
+            float length=manualDistances[segment+1]-manualDistances[segment];
+            manualPosition=length<=0f?manualPath[segment+1]:Vector3.Lerp(manualPath[segment],manualPath[segment+1],
+                (distance-manualDistances[segment])/length);
+            zone=ZoneFor(lastPassedNode);
+            if(elapsedTicks<totalTicks)return TraversalStepStatus.InProgress;
+            manualPosition=manualPath[4];lastPassedNode=manualNodeIds[4];zone=ZoneFor(lastPassedNode);
+            state=TraversalState.None;interruptedDirection=TraversalState.None;
+            return TraversalStepStatus.Completed;
+        }
+
+        void ReturnManualToPassedNode()
+        {
+            interruptedDirection=state;state=TraversalState.None;
+            manualPosition=manualPath[manualPassedIndex];
+            elapsedTicks=Mathf.CeilToInt(totalTicks*manualDistances[manualPassedIndex]/manualDistances[4]);
+            zone=ZoneFor(lastPassedNode);
+        }
+        // Owned life/safety/phase closure, never synthesized as key-up or damage.
+        public bool AbortManualForDomain(string reason)
+        {
+            if(manualAccess==null)throw new InvalidOperationException("Explicit manual access required.");
+            if(string.IsNullOrWhiteSpace(reason))throw new ArgumentException("Domain abort reason required.",nameof(reason));
+            if(state==TraversalState.None)return false;
+            LastManualAbortReason=reason;
+            ReturnManualToPassedNode();return true;
+        }
+
         public TraversalCommandStatus BeginNormalDescent()
         {
+            if(manualAccess!=null)throw new InvalidOperationException("Manual QA requires BeginManualNormal with the actual actor origin.");
             if (state != TraversalState.None) return TraversalCommandStatus.RejectedBusy;
             if (zone != LocationZone.UpperSafeZone) return TraversalCommandStatus.RejectedInvalidZone;
             Begin(TraversalState.Descending, NormalDescentTicks, upperPosition, groundPosition,
@@ -76,6 +184,7 @@ namespace LastWatch.Core.Traversal
 
         public TraversalCommandStatus BeginNormalAscent()
         {
+            if(manualAccess!=null)throw new InvalidOperationException("Manual QA requires BeginManualNormal with the actual actor origin.");
             if (state != TraversalState.None) return TraversalCommandStatus.RejectedBusy;
             if (zone != LocationZone.GroundDanger) return TraversalCommandStatus.RejectedInvalidZone;
             Begin(TraversalState.Ascending, NormalAscentTicks, groundPosition, upperPosition,
@@ -86,6 +195,7 @@ namespace LastWatch.Core.Traversal
         public TraversalStepStatus AdvanceOneTick(bool inputHeld, bool largeDamage)
         {
             if (state == TraversalState.None) return TraversalStepStatus.NotTraversing;
+            if(manualAccess!=null)return AdvanceManual(inputHeld,largeDamage);
             if (!inputHeld) return Interrupt(TraversalStepStatus.InterruptedInputReleased);
             if (largeDamage) return Interrupt(TraversalStepStatus.InterruptedLargeDamage);
 
@@ -142,10 +252,12 @@ namespace LastWatch.Core.Traversal
 
         private TraversalSnapshot CreateSnapshot()
         {
-            Vector3 position = state == TraversalState.None
+            Vector3 position = manualAccess!=null ? manualPosition : state == TraversalState.None
                 ? PositionFor(lastPassedNode)
                 : Vector3.Lerp(start, end, (float)elapsedTicks / totalTicks);
-            return new TraversalSnapshot(state, zone, lastPassedNode, elapsedTicks, totalTicks, position);
+            LocationZone actualZone=zone;
+            if(manualAccess!=null&&manualAccess.TryClassifyOrigin(position,out LocationZone classified))actualZone=classified;
+            return new TraversalSnapshot(state, actualZone, lastPassedNode, elapsedTicks, totalTicks, position);
         }
 
         private Vector3 PositionFor(TraversalPlatformNodeId node)

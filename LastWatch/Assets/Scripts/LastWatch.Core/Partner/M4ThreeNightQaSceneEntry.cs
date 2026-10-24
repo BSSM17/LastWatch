@@ -138,7 +138,7 @@ namespace LastWatch.Core.Partner
         // Scene/UI code must call this after the operator presses its explicit Start control.
         // Topology and damageables are supplied by the scene owner; this entry never chooses
         // Faces, stable IDs, hit points, or a replacement M3 queue.
-        public M4CommandResult StartExplicit(M4RunMetadata metadata, M4TopologySnapshot topology, DamageableFixture[] setup, PartnerRuntimeState initialPartner, IM4SessionStore store = null, M4PlayerWeaponActionSaveState initialPlayerWeaponAction = null)
+        public M4CommandResult StartExplicit(M4RunMetadata metadata, M4TopologySnapshot topology, DamageableFixture[] setup, PartnerRuntimeState initialPartner, IM4SessionStore store = null, M4PlayerWeaponActionSaveState initialPlayerWeaponAction = null, M4PlayerResourceInventory initialPlayerResources = null)
         {
             InvalidateCompletedTick("START_ATTEMPT");
             unchecked { contextGeneration++; }
@@ -148,7 +148,7 @@ namespace LastWatch.Core.Partner
             if (Started) throw new InvalidOperationException("The bounded entry is already started.");
 
             bootstrap.SelectDifficulty((M4HarnessDifficulty)selectedDifficulty);
-            bootstrap.StartCanonicalDiagnostic(metadata, topology, setup, initialPartner, store, initialPlayerWeaponAction);
+            bootstrap.StartCanonicalDiagnostic(metadata, topology, setup, initialPartner, store, initialPlayerWeaponAction, initialPlayerResources);
             M4CommandResult entry = bootstrap.EnterCanonicalDefense();
             fixedTickRunning = entry.Status == M4CommandStatus.Committed || entry.Status == M4CommandStatus.AlreadyCommitted;
             LastTickResult = entry;

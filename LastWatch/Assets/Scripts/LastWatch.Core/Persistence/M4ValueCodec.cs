@@ -26,10 +26,48 @@ namespace LastWatch.Core.Persistence
         internal static T Decode<T>(M4ValueDto value) => (T)DecodeValue(value, typeof(T), 0);
         internal static T Copy<T>(T value) => Decode<T>(Encode(value));
         // Explicit pre-navigation Partner layout. This is not permissive field decoding.
-        internal static M4ValueDto EncodeBeforePartnerMovement<T>(T value) => EncodeValue(value, typeof(T), "", 0, true);
-        internal static T DecodeBeforePartnerMovement<T>(M4ValueDto value) => (T)DecodeValue(value, typeof(T), 0, true);
-        internal static M4ValueDto EncodeBeforePartnerExchange<T>(T value) => EncodeValue(value, typeof(T), "", 0, false, true);
-        internal static T DecodeBeforePartnerExchange<T>(M4ValueDto value) => (T)DecodeValue(value, typeof(T), 0, false, true);
+        internal static M4ValueDto EncodeBeforePartnerMovement<T>(T value) => WithoutPlayerResources<T>(EncodeValue(value, typeof(T), "", 0, true));
+        internal static T DecodeBeforePartnerMovement<T>(M4ValueDto value) => (T)DecodeValue(WithUnavailablePlayerResources<T>(value), typeof(T), 0, true);
+        internal static M4ValueDto EncodeBeforePartnerExchange<T>(T value) => WithoutPlayerResources<T>(EncodeValue(value, typeof(T), "", 0, false, true));
+        internal static T DecodeBeforePartnerExchange<T>(M4ValueDto value) => (T)DecodeValue(WithUnavailablePlayerResources<T>(value), typeof(T), 0, false, true);
+        internal static M4ValueDto EncodeBeforePlayerResources<T>(T value) => WithoutPlayerResources<T>(Encode(value));
+        internal static T DecodeBeforePlayerResources<T>(M4ValueDto value) => Decode<T>(WithUnavailablePlayerResources<T>(value));
+
+        // Only the explicitly versioned session root changed. Preserve every nested
+        // historical field and exact ordering; never accept a partially new root.
+        static M4ValueDto WithoutPlayerResources<T>(M4ValueDto root)
+        {
+            if(typeof(T)!=typeof(M4SessionDto))return root;
+            if(root==null||root.kind!="object"||root.scalar!=null||root.children==null)throw new FormatException("Invalid historical session root.");
+            var children=new List<M4ValueDto>();bool removed=false;
+            foreach(var child in root.children)
+            {
+                if(child.name=="playerResources")
+                {
+                    if(removed||child.kind!="null"||child.scalar!=null||child.children.Length!=0)
+                        throw new FormatException("Historical session cannot contain Player resource inventory.");
+                    removed=true;
+                }
+                else children.Add(child);
+            }
+            if(!removed)throw new FormatException("Current session resource field missing.");
+            return new M4ValueDto{name=root.name,kind=root.kind,scalar=root.scalar,children=children.ToArray()};
+        }
+        static M4ValueDto WithUnavailablePlayerResources<T>(M4ValueDto root)
+        {
+            if(typeof(T)!=typeof(M4SessionDto))return root;
+            if(root==null||root.kind!="object"||root.scalar!=null||root.children==null)throw new FormatException("Invalid historical session root.");
+            var children=new List<M4ValueDto>();bool inserted=false;
+            foreach(var child in root.children)
+            {
+                if(child==null||child.name=="playerResources")throw new FormatException("Unexpected Player resource field in historical session.");
+                if(!inserted&&string.CompareOrdinal(child.name,"playerResources")>0)
+                {children.Add(new M4ValueDto{name="playerResources",kind="null",children=Array.Empty<M4ValueDto>()});inserted=true;}
+                children.Add(child);
+            }
+            if(!inserted)children.Add(new M4ValueDto{name="playerResources",kind="null",children=Array.Empty<M4ValueDto>()});
+            return new M4ValueDto{name=root.name,kind=root.kind,scalar=root.scalar,children=children.ToArray()};
+        }
         static FieldInfo[] BeforeExchangeFields(Type type)
         {
             var result = new List<FieldInfo>();

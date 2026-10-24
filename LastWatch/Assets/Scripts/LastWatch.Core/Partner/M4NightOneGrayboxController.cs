@@ -5,6 +5,7 @@ using LastWatch.Core.Combat;
 using LastWatch.Core.Identity;
 using LastWatch.Core.Space;
 using LastWatch.Core.State;
+using LastWatch.Core.Traversal;
 using UnityEngine;
 
 namespace LastWatch.Core.Partner
@@ -19,6 +20,13 @@ namespace LastWatch.Core.Partner
     {
         enum GrayboxWeapon { ServicePistol, AssaultRifle, WatchRifle }
         enum ReloadTransactionStatus { None, Active, Committed, Cancelled }
+
+        [Serializable] sealed class PlayerPartsQaFixture
+        {
+            public string fixtureId;
+            public int playerParts;
+            public int partnerParts;
+        }
 
         const ulong PlayerEntityValue = 0x4d340101UL;
         const ulong PartnerEntityValue = 0x4d340102UL;
@@ -51,6 +59,26 @@ namespace LastWatch.Core.Partner
         [Header("Explicit temporary QA profile asset (scene opt-in only)")]
         [SerializeField] TextAsset qaPartnerMovementProfileAsset;
         [SerializeField] TextAsset qaPartnerExchangePolicyAsset;
+        [SerializeField] TextAsset qaPlayerPartsFixtureAsset;
+        [SerializeField] bool qaEnableManualTraversal;
+        TraversalController manualTraversal;
+        bool manualERequested, manualEArmed = true, manualFocused = true, manualTraversalUsed;
+        int manualArrivalFrame = -1;
+        int manualFreshEFrame = -1;
+        string manualLastArrival;
+        float manualArrivalCueUntil;
+        string manualArrivalNoticeFact,manualArrivalNoticeAction,manualArrivalNoticeText;
+        GUIStyle manualCueStyle,manualArrivalStyle;
+        enum ManualEntryStage { Preview, Enqueue, FixedPending }
+        readonly struct ManualEntryReadiness
+        {
+            public readonly ManualTraversalEntryEvaluation Entry;
+            public readonly bool Eligible,ControlsOpen;
+            public readonly string Reason;
+            public ManualEntryReadiness(ManualTraversalEntryEvaluation entry,bool eligible,bool controlsOpen,string reason)
+            {Entry=entry;Eligible=eligible;ControlsOpen=controlsOpen;Reason=reason;}
+        }
+        string manualTraversalReceipt = "Normal traversal: explicit QA opt-in unavailable.";
         M4PartnerExchangePolicy partnerExchangePolicy;
         string partnerExchangePolicyIdentity;
         ulong partnerExchangeSelectionEpisode;
@@ -98,6 +126,7 @@ namespace LastWatch.Core.Partner
         bool partnerExchangeCancelRequested;
         ulong partnerExchangeCancelTransactionId;
         ExchangeDirection partnerExchangeDirection;
+        ExchangeResource partnerExchangeResource;
         string partnerExchangeInputRunIdentity;
         int partnerExchangeInputNight;
         int suppressMenuShotThroughFrame = -1;
@@ -106,15 +135,31 @@ namespace LastWatch.Core.Partner
         [Serializable] sealed class ExchangeFeedback
         {
             public string runIdentity, selectionEpisode, direction, result, transactionId;
+            public string resource;
             public int nightOrdinal, runTick, amount;
             public int playerReserveBefore, playerReserveAfter, partnerStockBefore, partnerStockAfter;
+            public int transferredResourcePlayerBefore, transferredResourcePlayerAfter;
+            public int transferredResourcePartnerBefore, transferredResourcePartnerAfter;
         }
         [Serializable] sealed class ExchangeFeedbackSnapshot
         {
             public string schema = "LastWatch.ExchangeFeedback.v1", runIdentity;
             public int runTick, playerArMagazine, playerArReserve, partnerArStock;
+            public int partnerParts;
+            public string playerPartsAvailability;
+            public M4PlayerResourceInventory playerResourceInventory;
+            public ManualTraversalFeedback manualTraversal;
             public ExchangeFeedback latestSelection, lastCompletedTransfer;
             public ExchangeTransaction retainedTransaction;
+        }
+        [Serializable] sealed class ManualTraversalFeedback
+        {
+            public string actualPose,actualZone,canonicalTraversal,state,lastPassedNode,receipt,domainAbortReason;
+            public string entryBlockedReason,arrival,actionReadiness;
+            public bool entryEligible,entryAscending;
+            public int elapsedTicks,totalTicks;
+            public bool interruptedRoute;
+            public string limits="50Hz source QA; big-damage event, full ground AI, body collision, replay and whole-actor restore not verified/supported.";
         }
         string exchangeFeedbackRun;
         ExchangeFeedback latestExchangeSelection, lastExchangeTransfer;
@@ -534,8 +579,18 @@ namespace LastWatch.Core.Partner
 
         void Update()
         {
+            // Observe every E edge before menu/pause/focus early returns. A held
+            // down discarded by those domains cannot later appear freshly armed.
+            if(qaEnableManualTraversal)
+            {
+                if(!Input.GetKey(KeyCode.E))manualEArmed=true;
+                if(Input.GetKeyDown(KeyCode.E))
+                {manualFreshEFrame=manualEArmed?Time.frameCount:-1;manualEArmed=false;}
+            }
             if (!started)
             {
+                manualFreshEFrame=-1;
+                if(qaEnableManualTraversal&&Input.GetKey(KeyCode.E))manualEArmed=false;
                 if (Input.GetKeyDown(KeyCode.Return)) startRequested = true;
                 return;
             }
@@ -564,7 +619,7 @@ namespace LastWatch.Core.Partner
             if (Input.GetKeyDown(KeyCode.Escape) && (entry.FixedTickRunning || entry.OwnerPaused))
             {
                 bool pause = !entry.OwnerPaused;
-                if (pause) { DiscardExchangeSelection("일시정지 전 미접수 선택 폐기"); partnerExchangeBeginRequested = false; partnerCoverRequested = false; partnerExchangeOpenRequested = false; DisarmPartnerQ(); StopManualTrigger(); }
+                if (pause) { DiscardExchangeSelection("일시정지 전 미접수 선택 폐기"); partnerExchangeBeginRequested = false; partnerCoverRequested = false; partnerExchangeOpenRequested = false; DisarmPartnerQ(); StopManualTrigger(); ClearManualTraversalLatch(); }
                 entry.SetOwnerPause(pause);
                 if (partnerQMode != PartnerQMode.None && !Input.GetKey(KeyCode.Q)) EndPartnerQ(false);
                 Cursor.lockState = pause ? CursorLockMode.None : CursorLockMode.Locked; Cursor.visible = pause;
@@ -572,11 +627,14 @@ namespace LastWatch.Core.Partner
             }
             if (!entry.FixedTickRunning)
             {
+                if(qaEnableManualTraversal&&!entry.OwnerPaused)CloseManualTraversalDomain("canonical fixed-tick domain ended");
                 StopManualTrigger();
                 DiscardExchangeSelection("진행 종료로 미접수 선택 폐기");
                 partnerCoverRequested = false; partnerExchangeBeginRequested = false;
                 return;
             }
+
+            if(qaEnableManualTraversal&&!manualFocused){StopManualTrigger();return;}
 
             if (partnerExchangeMenuOpen)
             {
@@ -586,6 +644,17 @@ namespace LastWatch.Core.Partner
                 return; // Menu clicks never become player-fired bullets or camera input.
             }
 
+            if(qaEnableManualTraversal&&manualTraversal!=null)
+            {
+                if(Input.GetKeyDown(KeyCode.E))
+                {
+                    var admission=ReadManualEntryReadiness(ManualEntryStage.Enqueue);
+                    if(admission.Eligible)manualERequested=true;
+                    else manualTraversalReceipt="E: "+admission.Reason;
+                }
+                if(manualERequested||manualTraversal.Snapshot.State!=TraversalState.None)
+                {StopManualTrigger();UpdateManualLook();return;}
+            }
             UpdatePlayerMovementAndLook();
             UpdateAimIndicator();
             if (Input.GetKeyDown(KeyCode.Q) && partnerQMode == PartnerQMode.None) BeginPartnerQ();
@@ -629,6 +698,12 @@ namespace LastWatch.Core.Partner
             qaPanelScroll = GUILayout.BeginScrollView(qaPanelScroll);
             GUILayout.Label(M4ThreeNightQaSceneEntry.EntryLabel + " — Night " + entry.ActiveNightOrdinal + " / 3 graybox");
             GUILayout.Label("RunSeed 1234 | " + entry.SelectedDifficulty);
+            if(qaEnableManualTraversal)
+            {
+                GUILayout.Label(manualTraversalReceipt);
+                GUILayout.Label("접근 통로에서 E 한 번: 자동 하강 약1s / 상승6s. 키를 놓아도 계속 이동합니다.");
+                GUILayout.Label("Big-damage input UNAVAILABLE | ground AI/direct damage/body collision not accepted.");
+            }
             GUILayout.Label("Entry=" + entry.Started + " | Fixed ticks=" + entry.FixedTickRunning + " | Cursor=" + Cursor.lockState);
             GUILayout.Label("Completed Nights=" + entry.CompletedNights + " | Stage=" + entry.CurrentStage);
             GUILayout.Label("Status: " + status);
@@ -694,6 +769,7 @@ namespace LastWatch.Core.Partner
             GUILayout.EndArea();
 
             if (started) DrawCombatReadability();
+            if(started&&qaEnableManualTraversal)DrawManualTraversalCue();
             if (started)
             {
                 DrawPartnerExchangeMenu();
@@ -795,6 +871,35 @@ namespace LastWatch.Core.Partner
         void StartExplicitRun(bool beginRecording = true,
             M4QaCaptureInputKind inputKind = M4QaCaptureInputKind.OwnerLiveInput, string inputPlanId = null)
         {
+            // Fixture input is consumed only at fresh session creation. Never grant
+            // on menu entry, Night transition or restoration of an existing session.
+            M4PlayerResourceInventory initialResources = null;
+            int initialPartnerParts = 0;
+            if (qaPlayerPartsFixtureAsset != null)
+            {
+                try
+                {
+                    string fixtureText = qaPlayerPartsFixtureAsset.text;
+                    LastWatch.Core.Persistence.M4StrictJson.Validate(fixtureText);
+                    var fixture = JsonUtility.FromJson<PlayerPartsQaFixture>(fixtureText);
+                    if (fixture == null || fixture.fixtureId != "LW-M4-PARTS-QA-20261022-R1" ||
+                        fixture.playerParts != 10 || fixture.partnerParts != 10)
+                        throw new FormatException("Selected QA fixture requires explicit Player10/Partner10 and the approved fixture ID.");
+                    string textHash;
+                    using (var sha = System.Security.Cryptography.SHA256.Create())
+                        textHash = BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(fixtureText))).Replace("-", "");
+                    initialResources = new M4PlayerResourceInventory { parts = fixture.playerParts,
+                        sourceReceiptId = fixture.fixtureId + "/UTF8_TEXT_SHA256/" + textHash };
+                    initialResources.Validate();
+                    initialPartnerParts = fixture.partnerParts;
+                }
+                catch (Exception error) when (!(error is OutOfMemoryException))
+                {
+                    status = "Explicit Start rejected: invalid selected Parts QA fixture: " + error.Message;
+                    Debug.LogError("[LastWatch M4] " + status, this);
+                    return;
+                }
+            }
             ResetExchangeFeedback(null);
             string nextCaptureRunId = beginRecording ? Guid.NewGuid().ToString("N") : string.Empty;
             M4QaCaptureRuntimeIdentity nextCaptureRuntimeIdentity = beginRecording
@@ -811,12 +916,13 @@ namespace LastWatch.Core.Partner
                 DesignatedFaceId = "A",
                 CurrentNodeId = "FaceA.Cover",
                 HitPoints = 100f,
-                Life = PartnerLifeState.Healthy
+                Life = PartnerLifeState.Healthy,
+                Parts = initialPartnerParts
             };
             if (authoredInitialPartnerNode != null) partner.CurrentNodeId = authoredInitialPartnerNode;
             lastPartnerProtectedShotSequence = 0; lastPartnerProtectedShotTick = -1;
             M4CommandResult result = entry.StartExplicit(metadata, topology, BuildSetup(), partner, null,
-                CapturePlayerWeaponActionSaveState(0));
+                CapturePlayerWeaponActionSaveState(0), initialResources);
             started = result.Status == M4CommandStatus.Committed || result.Status == M4CommandStatus.AlreadyCommitted;
             status = started ? "Night 1 is running. Clear real scheduled tickets to complete." : result.Status + ": " + result.Reason;
             if (!started) Debug.LogError("[LastWatch M4] Explicit Start rejected: " + status, this);
@@ -1006,6 +1112,7 @@ namespace LastWatch.Core.Partner
 #endif
             else
             {
+                if(qaEnableManualTraversal)ProcessManualTraversal(context);
                 if (currentWeapon == GrayboxWeapon.AssaultRifle) shotRequested = arFirstShotRequested || arTriggerHeld;
                 arFirstShotRequested = false; // Initial click is tried once, never queued beyond a blocked tick.
                 if (recordingReplay) TryRecordReplayTick(context.RunFixedTick, entry.ActiveNightOrdinal);
@@ -1093,6 +1200,7 @@ namespace LastWatch.Core.Partner
 
         public void RestorePlayerWeaponActionStateFromSession(M4Session session)
         {
+            if(manualTraversalUsed)throw new InvalidOperationException("Manual traversal actor/route restore is unavailable; start a fresh QA run.");
             if (session == null) throw new ArgumentNullException(nameof(session));
             if (!ReferenceEquals(session, entry.CanonicalSessionForPlayerAction))
                 throw new ArgumentException("Restore must use the currently bound canonical M4 session.", nameof(session));
@@ -1858,8 +1966,14 @@ namespace LastWatch.Core.Partner
         void BuildRuntimeGraybox()
         {
             var builder = gameObject.AddComponent<M2GrayboxBuilder>();
-            builder.BuildNormal();
+            if(qaEnableManualTraversal)builder.Build(TowerGeometryFixture.CreateManualTraversalQa());
+            else builder.BuildNormal();
             runtimeGeometry = builder.Geometry;
+            if(qaEnableManualTraversal)
+            {
+                manualTraversal=new TraversalController(50,runtimeGeometry.ManualAccess,automatic:true);
+                manualTraversalReceipt="Tap traversal ready: walk to the marked C/A access footprint, press E once.";
+            }
             BoxCollider[] stationMatches = builder.GetComponentsInChildren<BoxCollider>(true)
                 .Where(collider => collider.name == StationId.S_A.ToString()).ToArray();
             partnerExchangeStation = stationMatches.Length == 1 ? stationMatches[0] : null;
@@ -2041,11 +2155,15 @@ namespace LastWatch.Core.Partner
 
         void OnApplicationFocus(bool focus)
         {
+            manualFocused=focus;
+            ClearManualTraversalLatch(); // discard unaccepted/stale input only; committed movement continues
             if (!focus) DisarmPartnerQ();
         }
 
         void OnDisable()
         {
+            if(qaEnableManualTraversal)CloseManualTraversalDomain("controller disabled");
+            else ClearManualTraversalLatch();
             DiscardExchangeSelection("화면 비활성화로 미접수 선택 폐기");
             partnerCoverRequested = false; partnerExchangeOpenRequested = false;
             partnerExchangeBeginRequested = false; partnerQArmed = false; partnerQMode = PartnerQMode.None;
@@ -2295,6 +2413,7 @@ namespace LastWatch.Core.Partner
             return new ExchangeFeedback {
                 runIdentity = session.Metadata.RunId.ToString(), nightOrdinal = entry.ActiveNightOrdinal, runTick = tick,
                 selectionEpisode = partnerExchangeSelectionEpisode.ToString(), direction = partnerExchangeDirection.ToString(),
+                resource = partnerExchangeResource.ToString(),
                 result = result, transactionId = transaction == null ? null : transaction.TransactionId.ToString(),
                 amount = transaction == null ? 0 : transaction.Amount,
                 playerReserveBefore = assaultRifleReserve, playerReserveAfter = assaultRifleReserve,
@@ -2317,11 +2436,26 @@ namespace LastWatch.Core.Partner
         {
             if (session == null) return "{\"exchange\":{\"result\":\"canonical session unavailable\"}}";
             EnsureExchangeFeedback(session);
+            M4PlayerResourceInventory resources = session.ReadPlayerResourceInventory();
             var exchange = new ExchangeFeedbackSnapshot {
                 runIdentity = session.Metadata.RunId.ToString(), runTick = session.RuntimeRun.FixedTick,
                 playerArMagazine = assaultRifleMagazine, playerArReserve = assaultRifleReserve,
-                partnerArStock = session.RuntimePartner.ArAmmo, latestSelection = latestExchangeSelection,
+                partnerArStock = session.RuntimePartner.ArAmmo, partnerParts = session.RuntimePartner.Parts, latestSelection = latestExchangeSelection,
+                playerPartsAvailability = resources == null ? "UNAVAILABLE" : resources.parts == 0 ? "KNOWN_EMPTY" : "AVAILABLE",
+                playerResourceInventory = resources,
                 lastCompletedTransfer = lastExchangeTransfer, retainedTransaction = session.ReadPartner().PendingExchange };
+            if(qaEnableManualTraversal&&manualTraversal!=null)
+            {
+                var view=manualTraversal.Snapshot;
+                var admission=ReadManualEntryReadiness(ManualEntryStage.Preview);
+                exchange.manualTraversal=new ManualTraversalFeedback {actualPose=playerTransform.position.ToString("R"),
+                    actualZone=session.RuntimeRun.PlayerZone.ToString(),canonicalTraversal=session.RuntimeRun.PlayerTraversal.ToString(),
+                    state=view.State.ToString(),lastPassedNode=view.LastPassedNode.ToString(),elapsedTicks=view.ElapsedTicks,
+                    totalTicks=view.TotalTicks,interruptedRoute=manualTraversal.HasInterruptedManualRoute,receipt=manualTraversalReceipt,
+                    domainAbortReason=manualTraversal.LastManualAbortReason,entryEligible=admission.Eligible,
+                    entryAscending=admission.Entry.Ascending,entryBlockedReason=admission.Reason,arrival=manualLastArrival,
+                    actionReadiness=ReadManualActionReadiness(admission)};
+            }
             string feedbackJson = JsonUtility.ToJson(exchange, true);
             // Preserve every existing movement root field for existing diagnostic consumers.
             string movementJson = partnerMovement == null ? "{}" : partnerMovement.ExportMovementDiagnostics(session).TrimEnd();
@@ -2349,28 +2483,30 @@ namespace LastWatch.Core.Partner
             GUI.enabled = wasEnabled; // Scrolling and copying evidence also work during Owner pause.
             GUILayout.BeginArea(PartnerExchangePanelRect(), GUI.skin.box);
             partnerExchangeScroll = GUILayout.BeginScrollView(partnerExchangeScroll);
-            GUILayout.Label("RallyExchange: AR");
+            GUILayout.Label("RallyExchange: AR / Parts");
             GUILayout.Label("현재 AR 예비탄 " + assaultRifleReserve + " | Partner 보유탄 " + view.ArAmmo);
             GUILayout.Label("교환은 AR 예비탄을 옮깁니다. 탄창 장전은 R입니다.");
+            M4PlayerResourceInventory resources = session.ReadPlayerResourceInventory();
+            GUILayout.Label(resources == null ? "Parts: UNAVAILABLE (explicit Player inventory not supplied)" :
+                "현재 Parts Player " + resources.parts + " | Partner " + view.Parts);
             if (latestExchangeSelection != null)
-                GUILayout.Label("최근 선택 " + latestExchangeSelection.direction + " · " + latestExchangeSelection.result +
+                GUILayout.Label("최근 선택 " + latestExchangeSelection.resource + " " + latestExchangeSelection.direction + " · " + latestExchangeSelection.result +
                     (latestExchangeSelection.transactionId == null ? " · 새 거래 없음" : " · 연결 Tx " + latestExchangeSelection.transactionId));
             if (lastExchangeTransfer != null)
-                GUILayout.Label("마지막 실제 이전 Tx " + lastExchangeTransfer.transactionId + " " + lastExchangeTransfer.direction +
-                    " x" + lastExchangeTransfer.amount + "\nPlayer AR 예비탄 " + lastExchangeTransfer.playerReserveBefore + " → " + lastExchangeTransfer.playerReserveAfter +
-                    " | Partner " + lastExchangeTransfer.partnerStockBefore + " → " + lastExchangeTransfer.partnerStockAfter);
+                GUILayout.Label("마지막 실제 이전 Tx " + lastExchangeTransfer.transactionId + " " + lastExchangeTransfer.resource + " " + lastExchangeTransfer.direction +
+                    " x" + lastExchangeTransfer.amount + "\nPlayer " + lastExchangeTransfer.transferredResourcePlayerBefore + " → " + lastExchangeTransfer.transferredResourcePlayerAfter +
+                    " | Partner " + lastExchangeTransfer.transferredResourcePartnerBefore + " → " + lastExchangeTransfer.transferredResourcePartnerAfter);
             // Evidence copying remains available during Owner pause; it issues no gameplay input.
             if (GUILayout.Button("Copy exchange + movement diagnostics (read-only)"))
                 GUIUtility.systemCopyBuffer = ExportPartnerDiagnostics(session);
             GUI.enabled = exchangeControlsEnabled;
-            GUILayout.Label("Parts: UNAVAILABLE (canonical Player inventory not connected)");
             GUILayout.Label("Escape pauses / resumes; active exchange retains progress.");
             GUILayout.Label("Partner role: " + view.Role + " | " + (view.ExchangeFlow == null ? "" : view.ExchangeFlow.returnReason));
             GUILayout.Label(partnerExchangeReceipt);
             if (transaction != null)
                 GUILayout.Label((latestExchangeSelection != null && latestExchangeSelection.result == "접수 / ACCEPTED" &&
                     latestExchangeSelection.transactionId == transaction.TransactionId.ToString()
-                    ? "최근 선택과 연결된 거래 Tx " : "보존된 이전 거래 Tx ") + transaction.TransactionId + " " + transaction.Direction + " x" + transaction.Amount +
+                    ? "최근 선택과 연결된 거래 Tx " : "보존된 이전 거래 Tx ") + transaction.TransactionId + " " + transaction.Resource + " " + transaction.Direction + " x" + transaction.Amount +
                     " | " + (transaction.Completed ? "COMPLETED" : transaction.Cancelled ? "CANCELLED: " + transaction.CancellationReason :
                     "PENDING until runTick " + transaction.CompletionTick));
             if (partnerExchangeMenuOpen)
@@ -2379,6 +2515,10 @@ namespace LastWatch.Core.Partner
                 if (!partnerQArmed) GUILayout.Label("Selection disarmed: release Q, then press Q again.");
                 if (GUILayout.Button("Give Partner AR (30 or remaining)")) QueuePartnerExchangeBegin(ExchangeDirection.PlayerToPartner);
                 if (GUILayout.Button("Receive Partner AR (30 or remaining)")) QueuePartnerExchangeBegin(ExchangeDirection.PartnerToPlayer);
+                GUI.enabled = exchangeControlsEnabled && resources != null;
+                if (GUILayout.Button("Give Partner Parts (1)")) QueuePartnerExchangeBegin(ExchangeDirection.PlayerToPartner, ExchangeResource.Parts);
+                if (GUILayout.Button("Receive Partner Parts (1)")) QueuePartnerExchangeBegin(ExchangeDirection.PartnerToPlayer, ExchangeResource.Parts);
+                GUI.enabled = exchangeControlsEnabled;
             }
             if (transaction != null && !transaction.Completed && !transaction.Cancelled && GUILayout.Button("Cancel pending exchange"))
             { partnerExchangeCancelRequested = true; partnerExchangeCancelTransactionId = transaction.TransactionId; shotRequested = false; suppressMenuShotThroughFrame = Time.frameCount; }
@@ -2396,10 +2536,11 @@ namespace LastWatch.Core.Partner
             return PartnerExchangePanelRect().Contains(point);
         }
 
-        void QueuePartnerExchangeBegin(ExchangeDirection direction)
+        void QueuePartnerExchangeBegin(ExchangeDirection direction, ExchangeResource resource = ExchangeResource.ArAmmo)
         {
             if (!entry.FixedTickRunning || !partnerQArmed || partnerQMode != PartnerQMode.Exchange || !Input.GetKey(KeyCode.Q)) return;
             partnerExchangeDirection = direction;
+            partnerExchangeResource = resource;
             M4Session session = entry.CanonicalSessionForPlayerAction;
             if (session != null) RecordExchangeSelection(session, session.RuntimeRun.FixedTick, "선택 대기 / QUEUED");
             partnerExchangeBeginRequested = true;
@@ -2458,11 +2599,14 @@ namespace LastWatch.Core.Partner
                 {
                     try
                     {
-                        // Parts argument is unused by this AR-only transaction; it is not a Player inventory.
                         ulong previousTransaction = partner.PendingExchange == null ? 0 : partner.PendingExchange.TransactionId;
-                        controller.BeginExchange(partner.NextExchangeTransactionId, ExchangeResource.ArAmmo, partnerExchangeDirection,
-                            30, context.RunFixedTick, assaultRifleReserve, 0, 50, partnerId, session.Metadata.RunId.ToString(),
-                            entry.ActiveNightOrdinal, partner.CurrentNodeId ?? "ACTUAL_POSE", partnerExchangeSelectionEpisode, partnerExchangePolicyIdentity);
+                        if (partnerExchangeResource == ExchangeResource.Parts)
+                            session.BeginPlayerPartsExchange(partnerExchangeDirection, context.RunFixedTick, partnerId,
+                                partner.CurrentNodeId ?? "ACTUAL_POSE", partnerExchangeSelectionEpisode, partnerExchangePolicyIdentity);
+                        else
+                            controller.BeginExchange(partner.NextExchangeTransactionId, ExchangeResource.ArAmmo, partnerExchangeDirection,
+                                30, context.RunFixedTick, assaultRifleReserve, 0, 50, partnerId, session.Metadata.RunId.ToString(),
+                                entry.ActiveNightOrdinal, partner.CurrentNodeId ?? "ACTUAL_POSE", partnerExchangeSelectionEpisode, partnerExchangePolicyIdentity);
                         bool newTransaction = partner.PendingExchange != null && partner.PendingExchange.TransactionId != previousTransaction;
                         if (!newTransaction)
                         {
@@ -2486,10 +2630,17 @@ namespace LastWatch.Core.Partner
             transaction = partner.PendingExchange;
             if (completionBoundary && transaction != null && !transaction.Completed && !transaction.Cancelled)
             {
-                // Generic API requires Parts by reference; AR never reads or writes this unavailable resource.
+                // AR retains its original ref path. Parts may only use Session-owned
+                // inventory; never complete a Parts transaction against dummy zero.
                 int unusedParts = 0;
                 int playerBefore = assaultRifleReserve, partnerBefore = partner.ArAmmo;
-                if (controller.CompleteExchange(context.RunFixedTick, ref assaultRifleReserve, ref unusedParts))
+                bool partsTransaction = transaction.Resource == ExchangeResource.Parts;
+                M4PlayerResourceInventory partsBefore = partsTransaction ? session.ReadPlayerResourceInventory() : null;
+                int resourcePlayerBefore = partsTransaction ? (partsBefore == null ? 0 : partsBefore.parts) : playerBefore;
+                int resourcePartnerBefore = partsTransaction ? partner.Parts : partnerBefore;
+                bool transferred = partsTransaction ? session.CompletePlayerPartsExchange(context.RunFixedTick) :
+                    controller.CompleteExchange(context.RunFixedTick, ref assaultRifleReserve, ref unusedParts);
+                if (transferred)
                 {
                     // Capture only a real successful transfer, directly around the original ref call.
                     lastExchangeTransfer = CaptureExchangeFeedback(session, context.RunFixedTick, "COMPLETED", transaction);
@@ -2499,7 +2650,13 @@ namespace LastWatch.Core.Partner
                     // Latest episode associated with this transaction at completion, not its original issue episode.
                     lastExchangeTransfer.selectionEpisode = partner.ExchangeFlow == null ? null : partner.ExchangeFlow.lastSelectionEpisode.ToString();
                     lastExchangeTransfer.playerReserveBefore = playerBefore; lastExchangeTransfer.partnerStockBefore = partnerBefore;
-                    partnerExchangeReceipt = "Committed Tx " + transaction.TransactionId + ": Player AR " + assaultRifleReserve +
+                    lastExchangeTransfer.resource = transaction.Resource.ToString();
+                    lastExchangeTransfer.transferredResourcePlayerBefore = resourcePlayerBefore;
+                    lastExchangeTransfer.transferredResourcePartnerBefore = resourcePartnerBefore;
+                    lastExchangeTransfer.transferredResourcePlayerAfter = partsTransaction ? session.ReadPlayerResourceInventory().parts : assaultRifleReserve;
+                    lastExchangeTransfer.transferredResourcePartnerAfter = partsTransaction ? partner.Parts : partner.ArAmmo;
+                    partnerExchangeReceipt = partsTransaction ? "Committed Parts Tx " + transaction.TransactionId + " (one transfer)" :
+                        "Committed Tx " + transaction.TransactionId + ": Player AR " + assaultRifleReserve +
                         ", Partner AR " + partner.ArAmmo + " (one transfer)";
                 }
                 else if (transaction.Cancelled) partnerExchangeReceipt = "Cancelled: " + transaction.CancellationReason + "; resources unchanged.";
@@ -2532,6 +2689,7 @@ namespace LastWatch.Core.Partner
 
         void UpdatePlayerMovementAndLook()
         {
+            if(qaEnableManualTraversal){UpdateManualGroundOrUpperMovement();return;}
             float moveSpeed = Input.GetKey(KeyCode.LeftShift) ? 7f : 4f;
             Vector3 horizontal = new Vector3(Input.GetAxisRaw("Horizontal"), 0f, Input.GetAxisRaw("Vertical"));
             if (horizontal.sqrMagnitude > 1f) horizontal.Normalize();
@@ -2572,6 +2730,230 @@ namespace LastWatch.Core.Partner
             cameraPitchDegrees = Mathf.Clamp(cameraPitchDegrees - Input.GetAxis("Mouse Y") * 3f, -80f, 80f);
             playerCamera.transform.localRotation = Quaternion.Euler(cameraPitchDegrees, 0f, 0f);
             playerCamera.fieldOfView = partnerQMode == PartnerQMode.None && !partnerMouse1Blocked && Input.GetMouseButton(1) ? 55f : 70f;
+        }
+
+        ManualEntryReadiness ReadManualEntryReadiness(ManualEntryStage stage)
+        {
+            var physical=new ManualTraversalEntryEvaluation(false,false,-1,"입구를 확인할 수 없습니다");
+            if(manualTraversal!=null&&playerTransform!=null)physical=manualTraversal.EvaluateManualEntry(playerTransform.position);
+            M4Session session=entry==null?null:entry.CanonicalSessionForPlayerAction;
+            string blocked=null;
+            if(!qaEnableManualTraversal||!started||session==null||manualTraversal==null||playerCamera==null||!playerCamera.isActiveAndEnabled||
+                !IsFinitePartnerAim(playerCamera.transform.position)||!IsFinitePartnerAim(playerCamera.transform.forward))
+                blocked="게임 시작 후 입구를 확인하세요";
+            else if(!isActiveAndEnabled||!manualFocused)blocked="게임 화면을 선택하세요";
+            else if(entry.OwnerPaused)blocked="일시정지 중";
+            else if(!entry.FixedTickRunning||session.Stage!=M4SessionStage.Defense||session.RuntimeRun.Phase!=RunPhase.Defense)
+                blocked="현재는 이동을 시작할 수 없습니다";
+            else if(session.RuntimeRun.PlayerLife!=PlayerLifeState.Alive||session.RuntimeRun.Tower!=TowerState.Stable)
+                blocked="현재 상태에서는 이동할 수 없습니다";
+            else if(playingReplay)blocked="재생 중에는 직접 이동할 수 없습니다";
+#if UNITY_EDITOR
+            else if(deterministicInputPlanCapture||playingInputPlan||playingAdaptiveQa)blocked="현재는 직접 이동할 수 없습니다";
+#endif
+            else if(manualTraversal.Snapshot.State!=TraversalState.None||session.RuntimeRun.PlayerTraversal!=TraversalState.None)
+                blocked="이동 중입니다";
+            else if(Time.frameCount<=manualArrivalFrame)blocked="도착 확인 중";
+            else if(partnerExchangeMenuOpen||partnerQMode!=PartnerQMode.None||
+                (Cursor.lockState!=CursorLockMode.Locked&&PartnerExchangeUiOwnsPointer()))blocked="파트너 메뉴 선택 중";
+            if(blocked!=null)return new ManualEntryReadiness(physical,false,false,blocked);
+            if(IsReloadActive||reloadRequested)return new ManualEntryReadiness(physical,false,true,"재장전 중");
+            if(stage==ManualEntryStage.FixedPending)
+            {
+                // This intent already proves a fresh down. E-up and armed=false
+                // cannot discard it; only latest domain/entry gates may reject it.
+                if(!manualERequested)return new ManualEntryReadiness(physical,false,true,"새 E 입력이 필요합니다");
+            }
+            else
+            {
+                if(manualERequested)return new ManualEntryReadiness(physical,false,false,"이동을 시작하는 중");
+                bool fresh=stage==ManualEntryStage.Enqueue?manualFreshEFrame==Time.frameCount:manualEArmed;
+                if(!fresh)return new ManualEntryReadiness(physical,false,true,"E 키를 놓고 다시 누르세요");
+            }
+            return new ManualEntryReadiness(physical,physical.Eligible,true,physical.Reason);
+        }
+
+        string ReadManualActionReadiness(ManualEntryReadiness admission)
+        {
+            if(!admission.ControlsOpen)return admission.Reason;
+            if(IsReloadActive||reloadRequested)return "재장전 중 · 이동과 시점 조작 가능";
+            if(partnerMouse0Blocked||partnerMouse1Blocked||Input.GetKey(KeyCode.Q))return "버튼을 놓고 새로 입력하세요";
+            if(manualTraversal.HasInterruptedManualRoute&&manualTraversal.Snapshot.Zone==LocationZone.LowerAccess)
+                return "복귀 발판 · E로 남은 경로 이동";
+            if(Magazine(currentWeapon)<=0)return "탄창이 비었습니다";
+            var session=entry.CanonicalSessionForPlayerAction;
+            if(session!=null&&(session.RuntimeRun.FixedTick<=reloadShotBlockedThroughRunTick||
+                session.RuntimeRun.FixedTick<NextLegalShotRunTick(currentWeapon)))return "사격 준비 중 · 이동과 시점 조작 가능";
+            return "이동·시점·새 입력 가능";
+        }
+
+        void DrawManualTraversalCue()
+        {
+            if(manualTraversal==null||playerCamera==null||!playerCamera.isActiveAndEnabled)return;
+            var admission=ReadManualEntryReadiness(ManualEntryStage.Preview);
+            var view=manualTraversal.Snapshot;
+            if(manualCueStyle==null)manualCueStyle=new GUIStyle(GUI.skin.label){alignment=TextAnchor.MiddleCenter,fontSize=18,wordWrap=true};
+            if(manualArrivalStyle==null)manualArrivalStyle=new GUIStyle(manualCueStyle){fontSize=14};
+            Color previous=GUI.color;
+            bool moving=view.State!=TraversalState.None;
+            bool footprintVisible=false;
+            if(!moving&&manualFocused&&!entry.OwnerPaused&&entry.FixedTickRunning&&admission.Entry.FootprintNode>=0&&
+                !partnerExchangeMenuOpen&&partnerQMode==PartnerQMode.None)
+                footprintVisible=DrawManualEntryOutline(admission.Entry.FootprintNode,admission.Eligible?Color.green:Color.yellow);
+            // Pure presentation duration; never a command cooldown or readiness gate.
+            bool showArrival=!moving&&!string.IsNullOrEmpty(manualLastArrival)&&Time.unscaledTime<manualArrivalCueUntil;
+            if(!moving&&!manualERequested&&!admission.Eligible&&!footprintVisible&&!showArrival)return;
+            float y=Screen.height*0.5f+36f;
+            string cue=moving?(entry.OwnerPaused?"일시정지":view.State==TraversalState.Ascending?"올라가는 중":"내려가는 중"):
+                admission.Eligible?(admission.Entry.IsRecovery?"[E] 남은 경로 이동":admission.Entry.Ascending?"[E] 올라가기":"[E] 내려가기"):admission.Reason;
+            GUI.color=admission.Eligible?Color.green:Color.white;
+            GUI.Label(new Rect(Screen.width*0.5f-220f,y,440f,32f),cue,manualCueStyle);
+            if(moving)
+            {
+                GUI.color=new Color(0f,0f,0f,0.65f);GUI.DrawTexture(new Rect(Screen.width*0.5f-90f,y+33f,180f,5f),Texture2D.whiteTexture);
+                GUI.color=Color.cyan;GUI.DrawTexture(new Rect(Screen.width*0.5f-90f,y+33f,180f*view.NormalizedProgress,5f),Texture2D.whiteTexture);
+            }
+            else if(showArrival)
+            {
+                string action=ReadManualActionReadiness(admission);
+                if(manualArrivalNoticeFact!=manualLastArrival||manualArrivalNoticeAction!=action)
+                {manualArrivalNoticeFact=manualLastArrival;manualArrivalNoticeAction=action;manualArrivalNoticeText=manualLastArrival+" | "+action;}
+                GUI.color=Color.white;GUI.Label(new Rect(Screen.width*0.5f-270f,y+30f,540f,36f),manualArrivalNoticeText,manualArrivalStyle);
+            }
+            GUI.color=previous;
+        }
+
+        bool DrawManualEntryOutline(int node,Color color)
+        {
+            var access=runtimeGeometry.ManualAccess;
+            float minX=float.PositiveInfinity,minY=float.PositiveInfinity,maxX=float.NegativeInfinity,maxY=float.NegativeInfinity;
+            // Do not project another layer or a footprint behind the camera.
+            for(int corner=0;corner<4;corner++)
+            {
+                Vector3 screen=playerCamera.WorldToScreenPoint(access.EntryCorner(node,corner));
+                if(!IsFinitePartnerAim(screen)||screen.z<=playerCamera.nearClipPlane)return false;
+                minX=Mathf.Min(minX,screen.x);maxX=Mathf.Max(maxX,screen.x);minY=Mathf.Min(minY,screen.y);maxY=Mathf.Max(maxY,screen.y);
+            }
+            if(maxX<0f||maxY<0f||minX>Screen.width||minY>Screen.height)return false;
+            Matrix4x4 matrix=GUI.matrix;Color previous=GUI.color;GUI.color=color;
+            for(int corner=0;corner<4;corner++)
+            {
+                Vector3 a=playerCamera.WorldToScreenPoint(access.EntryCorner(node,corner));
+                Vector3 b=playerCamera.WorldToScreenPoint(access.EntryCorner(node,(corner+1)%4));
+                Vector2 from=new Vector2(a.x,Screen.height-a.y),to=new Vector2(b.x,Screen.height-b.y);
+                GUIUtility.RotateAroundPivot(Mathf.Atan2(to.y-from.y,to.x-from.x)*Mathf.Rad2Deg,from);
+                GUI.DrawTexture(new Rect(from.x,from.y,(to-from).magnitude,2f),Texture2D.whiteTexture);
+                GUI.matrix=matrix;
+            }
+            GUI.color=previous;
+            return true;
+        }
+
+        void ClearManualTraversalLatch()
+        {manualERequested=false;manualEArmed=false;manualFreshEFrame=-1;}
+
+        void BlockManualTraversalActions()
+        {
+            StopManualTrigger();reloadRequested=false;
+            partnerCoverRequested=false;partnerExchangeBeginRequested=false;partnerExchangeOpenRequested=false;
+            if(partnerQMode!=PartnerQMode.None)EndPartnerQ(false);
+            partnerMouse0Blocked=true;partnerMouse1Blocked=true;
+        }
+
+        void CloseManualTraversalDomain(string reason)
+        {
+            ClearManualTraversalLatch();
+            if(manualTraversal==null||manualTraversal.Snapshot.State==TraversalState.None)return;
+            manualTraversal.AbortManualForDomain(reason);
+            playerTransform.position=manualTraversal.Snapshot.Position;
+            var session=entry.CanonicalSessionForPlayerAction;
+            if(session!=null)SyncManualTraversalZone(session.RuntimeRun);
+            manualTraversalReceipt="Traversal domain abort: "+reason+"; returned to "+manualTraversal.Snapshot.LastPassedNode+
+                " at "+playerTransform.position.ToString("R")+". No damage generated.";
+        }
+
+        void SyncManualTraversalZone(RunState run)
+        {
+            if(runtimeGeometry.ManualAccess.TryClassify(playerTransform.position,runtimeGeometry.Zones,out LocationZone actual))
+                run.PlayerZone=actual;
+            else manualTraversalReceipt="Traversal UNAVAILABLE: actual origin has no authored volume.";
+            run.PlayerTraversal=manualTraversal.Snapshot.State;
+        }
+
+        void ProcessManualTraversal(M4ThreeNightQaFixedTickContext context)
+        {
+            if(manualTraversal==null)return;
+            if(!isActiveAndEnabled){CloseManualTraversalDomain("controller inactive at fixed boundary");return;}
+            if(context.Run.PlayerLife!=PlayerLifeState.Alive||context.Run.Phase!=RunPhase.Defense||context.Run.Tower!=TowerState.Stable)
+            {CloseManualTraversalDomain("life="+context.Run.PlayerLife+", phase="+context.Run.Phase+", tower="+context.Run.Tower);return;}
+            bool blockedTick=manualTraversal.Snapshot.State!=TraversalState.None;
+            if(blockedTick)manualERequested=false; // no repeated or reverse command can wait behind an accepted traversal
+            if(manualERequested)
+            {
+                var admission=ReadManualEntryReadiness(ManualEntryStage.FixedPending);
+                manualERequested=false;
+                if(!admission.Eligible)
+                    manualTraversalReceipt="E 거절: "+admission.Reason;
+                else
+                {
+                        var result=manualTraversal.BeginManualNormal(playerTransform.position,admission.Entry.Ascending);
+                        manualTraversalReceipt="Normal traversal: "+result;
+                        if(result==TraversalCommandStatus.Started)
+                        {
+                            manualLastArrival=null;
+                            blockedTick=true;manualTraversalUsed=true;
+                            if(recordingReplay)InvalidateReplayCapture("manual normal traversal accepted; tape/whole actor route restore unavailable",expectedManualInput:true);
+                        }
+                }
+            }
+            if(manualTraversal.Snapshot.State!=TraversalState.None)
+            {
+                bool ascending=manualTraversal.Snapshot.State==TraversalState.Ascending;
+                var step=manualTraversal.AdvanceOneTick(true,false); // accepted command, independent of key/focus; no invented large-damage source
+                var view=manualTraversal.Snapshot;
+                playerTransform.position=view.Position;
+                if(step==TraversalStepStatus.Completed)
+                {manualArrivalFrame=Time.frameCount;manualERequested=false;manualLastArrival=ascending?"상부 도착 · 이동 완료":"지상 도착 · 이동 완료";
+                    manualArrivalCueUntil=Time.unscaledTime+1.5f;}
+                manualTraversalReceipt="Tap traversal "+step+" | "+view.State+" | "+view.ElapsedTicks+"/"+view.TotalTicks+
+                    " | passed "+view.LastPassedNode;
+            }
+            if(blockedTick)BlockManualTraversalActions();
+            SyncManualTraversalZone(context.Run);
+        }
+
+        void UpdateManualLook()
+        {
+            playerTransform.Rotate(0f,Input.GetAxis("Mouse X")*3f,0f,UnityEngine.Space.Self);
+            cameraPitchDegrees=Mathf.Clamp(cameraPitchDegrees-Input.GetAxis("Mouse Y")*3f,-80f,80f);
+            playerCamera.transform.localRotation=Quaternion.Euler(cameraPitchDegrees,0f,0f);
+            playerCamera.fieldOfView=manualTraversal.Snapshot.State==TraversalState.None&&partnerQMode==PartnerQMode.None&&
+                !partnerMouse1Blocked&&Input.GetMouseButton(1)?55f:70f;
+        }
+
+        void UpdateManualGroundOrUpperMovement()
+        {
+            Vector3 prior=playerTransform.position;
+            if(runtimeGeometry.ManualAccess.TryClassify(prior,runtimeGeometry.Zones,out LocationZone actual)&&actual!=LocationZone.LowerAccess)
+            {
+                Vector3 input=new Vector3(Input.GetAxisRaw("Horizontal"),0f,Input.GetAxisRaw("Vertical"));
+                if(input.sqrMagnitude>1f)input.Normalize();
+                Vector3 desired=prior+playerTransform.TransformDirection(input)*((Input.GetKey(KeyCode.LeftShift)?7f:4f)*Time.deltaTime);
+                desired.y=prior.y;
+                foreach(var volume in runtimeGeometry.Zones)
+                    if(volume.Zone==actual)
+                    {
+                        if(actual==LocationZone.UpperSafeZone&&runtimeGeometry.ManualAccess.IsDeckOpening(desired))break;
+                        if(volume.Contains(desired))playerTransform.position=desired;
+                        else if(TryProjectManualUpperOrigin(volume,prior,desired,out Vector3 bounded)&&
+                            (actual!=LocationZone.UpperSafeZone||!runtimeGeometry.ManualAccess.IsDeckOpening(bounded)))playerTransform.position=bounded;
+                        break;
+                    }
+                if(!playerTransform.position.Equals(prior))manualTraversal.ObserveManualEndpointWalk(playerTransform.position);
+                manualUpperOriginReceipt="Manual "+actual+" origin bounded; body/wall/enemy collision and full ground AI remain unverified.";
+            }
+            else manualUpperOriginReceipt="Access recovery landing: translation held; normal key release no longer stops movement. Camera look remains available.";
+            UpdateManualLook();
         }
 
         static bool TryProjectManualUpperOrigin(ZoneVolumeDescriptor zone, Vector3 prior, Vector3 desired, out Vector3 bounded)

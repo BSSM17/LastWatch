@@ -21,10 +21,10 @@ namespace LastWatch.Core.Partner
         public M4Session CanonicalSession { get; private set; }
         IM4SessionStore sessionStore;
         public IM4SessionStore SessionStore => sessionStore;
-        public void StartCanonicalDiagnostic(M4RunMetadata metadata,M4TopologySnapshot topology,DamageableFixture[] setup,PartnerRuntimeState initialPartner,IM4SessionStore store=null,M4PlayerWeaponActionSaveState initialPlayerWeaponAction=null)
+        public void StartCanonicalDiagnostic(M4RunMetadata metadata,M4TopologySnapshot topology,DamageableFixture[] setup,PartnerRuntimeState initialPartner,IM4SessionStore store=null,M4PlayerWeaponActionSaveState initialPlayerWeaponAction=null,M4PlayerResourceInventory initialPlayerResources=null)
         {
             if(Started)throw new InvalidOperationException("A diagnostic is already started.");
-            CanonicalSession=M4Session.CreateNew(metadata,"0.1.0-m4-static",topology,setup,initialPartner,initialPlayerWeaponAction);
+            CanonicalSession=M4Session.CreateNew(metadata,"0.1.0-m4-static",topology,setup,initialPartner,initialPlayerWeaponAction,initialPlayerResources);
             sessionStore=store??new M4InMemorySessionStore();Started=true;
         }
         public LastWatch.Core.Persistence.M4LoadResult RestoreCanonicalDiagnostic(string json)

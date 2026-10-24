@@ -28,7 +28,7 @@ namespace LastWatch.Core.State
     public sealed partial class M4Session
     {
         readonly object gate=new object();bool writing;
-        M4RunMetadata metadata;RunState run;PartnerRuntimeState partner;M4PlayerWeaponActionSaveState playerWeaponAction;M4TopologySnapshot topology;
+        M4RunMetadata metadata;RunState run;PartnerRuntimeState partner;M4PlayerWeaponActionSaveState playerWeaponAction;M4PlayerResourceInventory playerResources;M4TopologySnapshot topology;
         readonly List<DefenseEntrySnapshot> entries=new List<DefenseEntrySnapshot>();
         readonly List<ulong> completionCursors=new List<ulong>();
         M4ThreeNightHarness harness;M4AuthoritativeCommitCoordinator coordinator;
@@ -51,6 +51,63 @@ namespace LastWatch.Core.State
         public RunStateSnapshot ReadRun()=>run.Snapshot();
         public PartnerRuntimeState ReadPartner()=>M4ValueCodec.Copy(partner);
         public M4PlayerWeaponActionSaveState ReadPlayerWeaponActionState()=>playerWeaponAction==null?null:playerWeaponAction.Copy();
+        public M4PlayerResourceInventory ReadPlayerResourceInventory()=>playerResources==null?null:playerResources.Copy();
+
+        // Core-only resource seam. The caller still owns actual actor proximity/LOS,
+        // movement admission, health capture and higher-priority cancellation.
+        internal void BeginPlayerPartsExchange(ExchangeDirection direction, int nowTick,
+            ulong targetPartnerEntityValue, string stationDescriptorId, ulong selectionEpisode, string policyIdentity)
+        {
+            lock(gate)
+            {
+                if(writing)throw new InvalidOperationException("A session save transaction is pending.");
+                if(playerResources==null)throw new InvalidOperationException("Canonical Player Parts inventory UNAVAILABLE.");
+                playerResources.Validate();
+                if(stage!=M4SessionStage.Defense||ActiveEntry==null||nowTick!=run.FixedTick||
+                    run.Phase!=RunPhase.Defense||run.PlayerLife!=PlayerLifeState.Alive||run.Tower!=TowerState.Stable)
+                    throw new InvalidOperationException("Current Defense exchange boundary required.");
+                bool targetFound=false;EntityId playerId=default;
+                foreach(var binding in topology.Bindings)
+                {
+                    if(binding.Role==M4BindingRole.Partner&&binding.EntityId.Value==targetPartnerEntityValue)targetFound=true;
+                    if(binding.Role==M4BindingRole.Player)playerId=binding.EntityId;
+                }
+                if(!targetFound||!run.TryGetDamageable(playerId,out DamageableSnapshot playerHealth)||
+                    !run.TryGetDamageable(new EntityId(targetPartnerEntityValue),out DamageableSnapshot partnerHealth)||
+                    string.IsNullOrWhiteSpace(policyIdentity))throw new ArgumentException("Canonical actors and explicit policy required.");
+                ulong priorTransaction=partner.PendingExchange==null?0:partner.PendingExchange.TransactionId;
+                new PartnerController(partner).BeginExchange(partner.NextExchangeTransactionId,ExchangeResource.Parts,
+                    direction,1,nowTick,0,playerResources.parts,50,targetPartnerEntityValue,
+                    metadata.RunId.ToString(),ActiveEntry.Key.NightOrdinal,stationDescriptorId,selectionEpisode,policyIdentity);
+                if(partner.PendingExchange!=null&&partner.PendingExchange.TransactionId!=priorTransaction)
+                {
+                    partner.PendingExchange.PlayerHitPointsAtBegin=playerHealth.HitPoints;
+                    partner.PendingExchange.PartnerHitPointsAtBegin=partnerHealth.HitPoints;
+                }
+            }
+        }
+        internal bool CompletePlayerPartsExchange(int nowTick)
+        {
+            lock(gate)
+            {
+                if(writing)throw new InvalidOperationException("A session save transaction is pending.");
+                // SceneEntry advances/observes first, then supplies the original
+                // completed tick to completion sinks, just like the AR path.
+                if(run.FixedTick==0||nowTick!=run.FixedTick-1)throw new ArgumentException("Canonical completed tick required.");
+                var transaction=partner.PendingExchange;
+                if(transaction==null||transaction.Resource!=ExchangeResource.Parts||transaction.Completed||transaction.Cancelled)return false;
+                var controller=new PartnerController(partner);
+                if(playerResources==null||stage!=M4SessionStage.Defense||ActiveEntry==null||
+                    run.Phase!=RunPhase.Defense||run.PlayerLife!=PlayerLifeState.Alive||run.Tower!=TowerState.Stable||
+                    transaction.RunIdentity!=metadata.RunId.ToString()||transaction.NightOrdinal!=ActiveEntry.Key.NightOrdinal)
+                {controller.CancelExchange(nowTick,"canonical Player Parts inventory/context unavailable");return false;}
+                playerResources.Validate();
+                int parts=playerResources.parts,unusedAr=0;
+                bool completed=controller.CompleteExchange(nowTick,ref unusedAr,ref parts);
+                if(completed)playerResources.parts=parts;
+                return completed;
+            }
+        }
         internal void RecordPlayerWeaponActionState(M4PlayerWeaponActionSaveState state)
         {
             if(state==null)throw new ArgumentNullException(nameof(state));
@@ -66,13 +123,14 @@ namespace LastWatch.Core.State
         public M4FrozenEvidence ExportFrozen()=>harness.ExportFrozen();
         M4Session(){}
 
-        public static M4Session CreateNew(M4RunMetadata metadata,string buildVersion,M4TopologySnapshot topology,DamageableFixture[] setup,PartnerRuntimeState initialPartner,M4PlayerWeaponActionSaveState initialPlayerWeaponAction=null)
+        public static M4Session CreateNew(M4RunMetadata metadata,string buildVersion,M4TopologySnapshot topology,DamageableFixture[] setup,PartnerRuntimeState initialPartner,M4PlayerWeaponActionSaveState initialPlayerWeaponAction=null,M4PlayerResourceInventory initialPlayerResources=null)
         {
             if(metadata==null||topology==null||setup==null||initialPartner==null)throw new ArgumentNullException();
             var s=new M4Session{metadata=metadata,topology=topology,stage=M4SessionStage.New};
             s.run=RunStateFactory.CreateNew(metadata.RunId,buildVersion,"3.1",metadata.RunSeed);s.run.RunContext=RunContextDefinition.ForM4(metadata);
             foreach(DamageableFixture d in setup){if(d==null||!Enum.IsDefined(typeof(DamageableKind),d.Kind))throw new ArgumentException("Invalid setup damageable.");s.run.AddDamageable(new EntityId(d.EntityValue),d.Kind,d.HitPoints,d.IsResolved);}
             s.partner=M4ValueCodec.Copy(initialPartner);
+            if(initialPlayerResources!=null)s.playerResources=initialPlayerResources.Copy();
             if(initialPlayerWeaponAction!=null){initialPlayerWeaponAction.Validate();s.playerWeaponAction=initialPlayerWeaponAction.Copy();}
             if(s.partner.Data40Facts==null||s.partner.Data40Facts.Count!=0||s.partner.FriendlyIncidents==null||s.partner.FriendlyIncidents.Count!=0||s.partner.Life!=PartnerLifeState.Healthy||s.partner.DeathTick.HasValue)
                 throw new ArgumentException("New session requires uncommitted initial Partner state.");

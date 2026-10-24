@@ -29,7 +29,7 @@ namespace LastWatch.Core.State
     }
     internal static class M4SessionValidation
     {
-        internal static void ValidatePartner(RunState run,PartnerRuntimeState p,M4TopologySnapshot topology)
+        internal static void ValidatePartner(RunState run,PartnerRuntimeState p,M4TopologySnapshot topology,M4PlayerResourceInventory playerResources=null)
         {
             M4PartnerMovementPersistence.Validate(p);
             if (p.MovementProgress != null && (p.MovementProgress.runIdentity != run.RunId.ToString() ||
@@ -80,7 +80,7 @@ namespace LastWatch.Core.State
                     foreach (var binding in topology.Bindings)
                         if (binding.Role == M4BindingRole.Partner && binding.EntityId.Value == exchange.TargetPartnerEntityValue) targetFound = true;
                     if (!targetFound || exchange.RunIdentity != run.RunId.ToString() || exchange.NightOrdinal < 1 || exchange.NightOrdinal > 3 ||
-                        string.IsNullOrWhiteSpace(exchange.StationDescriptorId) || exchange.Resource != ExchangeResource.ArAmmo || exchange.TicksPerSecond != 50 ||
+                        string.IsNullOrWhiteSpace(exchange.StationDescriptorId) || (exchange.Resource == ExchangeResource.Parts && playerResources == null) || exchange.TicksPerSecond != 50 ||
                         exchange.PlayerHitPointsAtBegin < 0f || float.IsNaN(exchange.PlayerHitPointsAtBegin) || float.IsInfinity(exchange.PlayerHitPointsAtBegin) ||
                         exchange.PartnerHitPointsAtBegin < 0f || float.IsNaN(exchange.PartnerHitPointsAtBegin) || float.IsInfinity(exchange.PartnerHitPointsAtBegin))
                         throw new FormatException("Bound QA exchange target/context/domain mismatch.");

@@ -14,7 +14,7 @@ namespace LastWatch.Core.State
         void Adopt(M4Session s)
         {
             bool sameEntry=ActiveEntry!=null&&s.ActiveEntry!=null&&ActiveEntry.Key.Equals(s.ActiveEntry.Key);
-            metadata=s.metadata;run=s.run;partner=s.partner;playerWeaponAction=s.playerWeaponAction;topology=s.topology;entries.Clear();entries.AddRange(s.entries);completionCursors.Clear();completionCursors.AddRange(s.completionCursors);harness=s.harness;coordinator=s.coordinator;
+            metadata=s.metadata;run=s.run;partner=s.partner;playerWeaponAction=s.playerWeaponAction;playerResources=s.playerResources;topology=s.topology;entries.Clear();entries.AddRange(s.entries);completionCursors.Clear();completionCursors.AddRange(s.completionCursors);harness=s.harness;coordinator=s.coordinator;
             if(!sameEntry){director=s.director;pool=s.pool;runners=s.runners;projection=s.projection;}
             stage=s.stage;generation=s.generation;nightStart=s.nightStart;
         }
@@ -35,14 +35,14 @@ namespace LastWatch.Core.State
             var list=new M4EntryDto[entries.Count];for(int n=0;n<list.Length;n++){list[n]=M4SessionJson.Entry(entries[n]);list[n].digest=entries[n].Digest;}
             var contexts=new List<M4ContextStampDto>();foreach(var f in ReadEventContexts())if(f.Cursor.Namespace==M4CursorNamespace.RunFacts||f.Cursor.Namespace==M4CursorNamespace.PartnerData40)contexts.Add(new M4ContextStampDto{producer=f.Cursor.Namespace,cursor=f.Cursor.Value,ordinal=f.Context.Key.NightOrdinal,entryDigest=f.Context.EntrySnapshotHash});
             return new M4SessionDto{format=M4SessionJson.Format,schema=3,hashVersion=1,profile=M4BridgeProfile.Id,seedAlgorithm=M4BridgeProfile.SeedAlgorithm,queueAlgorithm=M4BridgeProfile.QueueAlgorithm,ruleset=31,runId=metadata.RunId.Value,runSeed=metadata.RunSeed,difficulty=metadata.Difficulty,rulesetHash=metadata.RulesetHash,contentVersion=metadata.ContentVersion,generation=generation,stage=stage,completedNights=CompletedNights,snapshotTick=run.FixedTick,nightStartTick=nightStart,runtimeCoverage=M4SessionJson.RuntimeCoverage,
-                run=RunStateJson.CaptureM4Payload(run),partner=M4ValueCodec.Copy(partner),playerWeaponAction=playerWeaponAction==null?null:playerWeaponAction.Copy(),entries=list,topology=M4SessionJson.Topology(topology),combat=director==null?null:M4CombatCodec.Capture(director,pool,runners,projection),coordinator=coordinator.CaptureSave(),harness=harness.CaptureSave(),contexts=contexts.ToArray(),completionRunFactCursors=completionCursors.ToArray()};
+                run=RunStateJson.CaptureM4Payload(run),partner=M4ValueCodec.Copy(partner),playerWeaponAction=playerWeaponAction==null?null:playerWeaponAction.Copy(),playerResources=playerResources==null?null:playerResources.Copy(),entries=list,topology=M4SessionJson.Topology(topology),combat=director==null?null:M4CombatCodec.Capture(director,pool,runners,projection),coordinator=coordinator.CaptureSave(),harness=harness.CaptureSave(),contexts=contexts.ToArray(),completionRunFactCursors=completionCursors.ToArray()};
         }
 
         internal static M4Session RestoreDto(M4SessionDto source)
         {
             M4SessionDto d=M4ValueCodec.Copy(source);
             if(d.run==null||d.partner==null||d.entries==null||d.contexts==null||d.completionRunFactCursors==null||d.entries.Length>3||d.completedNights!=d.completionRunFactCursors.Length)throw new FormatException("Incomplete session graph.");
-            var s=new M4Session{metadata=new M4RunMetadata(new RunId(d.runId),d.runSeed,d.difficulty),topology=M4SessionJson.Topology(d.topology),stage=d.stage,generation=d.generation,nightStart=d.nightStartTick,partner=d.partner,playerWeaponAction=d.playerWeaponAction==null?null:d.playerWeaponAction.Copy()};
+            var s=new M4Session{metadata=new M4RunMetadata(new RunId(d.runId),d.runSeed,d.difficulty),topology=M4SessionJson.Topology(d.topology),stage=d.stage,generation=d.generation,nightStart=d.nightStartTick,partner=d.partner,playerWeaponAction=d.playerWeaponAction==null?null:d.playerWeaponAction.Copy(),playerResources=d.playerResources==null?null:d.playerResources.Copy()};
             s.run=RunStateJson.RestoreM4Payload(d.run,s.metadata);if(s.run.FixedTick!=d.snapshotTick)throw new FormatException("Snapshot tick mismatch.");
             for(int n=0;n<d.entries.Length;n++){if(d.entries[n].ordinal!=n+1)throw new FormatException("Entry ledger ordinal mismatch.");s.entries.Add(M4SessionJson.Entry(d.entries[n],s.metadata));}
             s.completionCursors.AddRange(d.completionRunFactCursors);s.harness=M4ThreeNightHarness.Restore(d.harness);s.coordinator=s.MakeCoordinator(d.coordinator);
@@ -69,8 +69,9 @@ namespace LastWatch.Core.State
 
         void ValidateCoherence()
         {
-            topology.ValidateRun(run);M4SessionValidation.ValidatePartner(run,partner,topology);
+            topology.ValidateRun(run);M4SessionValidation.ValidatePartner(run,partner,topology,playerResources);
             if(playerWeaponAction!=null)playerWeaponAction.Validate();
+            if(playerResources!=null)playerResources.Validate();
             if(!run.RunId.Equals(metadata.RunId)||harness.Difficulty!=(M4HarnessDifficulty)metadata.Difficulty||harness.CompletedNights!=CompletedNights||CompletedNights>3)throw new FormatException("Run/history identity mismatch.");
             bool committed=stage==M4SessionStage.NightCompleted||stage==M4SessionStage.Frozen;
             if(stage==M4SessionStage.New){if(entries.Count!=0||CompletedNights!=0||director!=null||nightStart.HasValue)throw new FormatException("New session has continuation state.");}
